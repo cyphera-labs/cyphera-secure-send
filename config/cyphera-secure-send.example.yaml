@@ -1,0 +1,61 @@
+# Cyphera SecureSend configuration. Every key is optional; these are the
+# defaults. Any key can also be set as an environment variable:
+#   CYPHERA_SECURESEND__<SECTION>__<KEY>, for example
+#   CYPHERA_SECURESEND__BRANDING__COMPANY_NAME=Acme
+
+server:
+  bind: 0.0.0.0:8080
+  management_bind: 127.0.0.1:9090   # liveness, readiness, metrics; keep private
+  trusted_proxies: []               # CIDRs whose X-Forwarded-For is honored
+  hsts: false                       # enable when served over HTTPS
+  shutdown_timeout_seconds: 10
+  tls:
+    cert_path: null                 # set both to terminate TLS in-process
+    key_path: null
+
+messages:
+  ttl_options_seconds: [300, 900, 3600, 28800, 86400]
+  default_ttl_seconds: 3600
+  min_ttl_seconds: 60
+  max_ttl_seconds: 86400
+  max_plaintext_bytes: 65536
+  memory_budget_bytes: 268435456    # 256 MiB of ciphertext before eviction
+  max_failed_proofs: 5              # wrong passwords before the message is destroyed
+  kdf:
+    recommended_iterations: 600000
+    min_iterations: 100000
+    max_iterations: 5000000
+
+rate_limits:
+  create_per_minute: 10             # per client address
+  consume_per_minute: 30
+  revoke_per_minute: 30
+
+storage:
+  backend: memory
+
+audit:
+  sink: stdout                      # one JSON object per line
+  include_client_ip: false
+  include_user_agent: false
+
+auth:
+  mode: anonymous
+
+branding:
+  product_name: Cyphera SecureSend
+  company_name: ""
+  tagline: Share sensitive information securely.
+  logo_path: null                   # e.g. /config/logo.svg
+  favicon_path: null                # e.g. /config/favicon.png
+  support_url: ""
+  footer_text: ""
+  show_powered_by: true
+  colors:
+    primary: "#1f4e79"
+    on_primary: "#ffffff"
+    secondary: "#4f6d8a"
+    surface: "#fbfcfe"
+    on_surface: "#191c1e"
+    surface_variant: "#e1e5ea"
+    error: "#ba1a1a"

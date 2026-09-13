@@ -1,0 +1,165 @@
+/* Material 3 inspired tokens. Brand colors arrive as custom properties set
+   by the application from server configuration; these are the defaults. */
+:root {
+  --md-primary: #1f4e79;
+  --md-on-primary: #ffffff;
+  --md-secondary: #4f6d8a;
+  --md-surface: #fbfcfe;
+  --md-on-surface: #191c1e;
+  --md-surface-variant: #e1e5ea;
+  --md-error: #ba1a1a;
+  --md-outline: color-mix(in srgb, var(--md-on-surface) 30%, transparent);
+  --md-surface-container: color-mix(in srgb, var(--md-surface) 96%, var(--md-on-surface));
+  --md-primary-container: color-mix(in srgb, var(--md-primary) 14%, var(--md-surface));
+  --md-secondary-container: color-mix(in srgb, var(--md-secondary) 18%, var(--md-surface));
+  --md-error-container: color-mix(in srgb, var(--md-error) 12%, var(--md-surface));
+  --radius-l: 28px;
+  --radius-m: 16px;
+  --radius-s: 8px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; min-height: 100%; }
+
+body {
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--md-on-surface);
+  background: var(--md-surface);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+.app[hidden] { display: none; }
+
+.top {
+  display: flex;
+  align-items: center;
+  padding: 16px 24px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.brand-logo { height: 32px; width: auto; max-width: 160px; }
+.brand-company { color: var(--md-primary); }
+
+.page {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 16px;
+}
+
+.card {
+  width: 100%;
+  max-width: 560px;
+  background: var(--md-surface-container);
+  border-radius: var(--radius-l);
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+h1 { font-size: 1.6rem; font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+.lede { margin: -8px 0 0; color: color-mix(in srgb, var(--md-on-surface) 72%, transparent); }
+p { margin: 0; }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field-label { font-size: 0.85rem; font-weight: 500; color: color-mix(in srgb, var(--md-on-surface) 80%, transparent); }
+.field-hint { font-size: 0.8rem; color: color-mix(in srgb, var(--md-on-surface) 60%, transparent); }
+.field-hint.over { color: var(--md-error); font-weight: 600; }
+
+input, textarea, select {
+  font: inherit;
+  color: inherit;
+  width: 100%;
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline);
+  border-radius: var(--radius-s);
+  padding: 12px 14px;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--md-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-primary) 30%, transparent);
+}
+
+textarea { resize: vertical; font-family: var(--mono); font-size: 0.95rem; }
+textarea.plain { min-height: 160px; }
+input[readonly] { font-family: var(--mono); font-size: 0.9rem; }
+
+.row { display: flex; gap: 8px; align-items: center; }
+.row > input { flex: 1; min-width: 0; }
+
+button, a.text-button {
+  font: inherit;
+  font-weight: 500;
+  border: none;
+  border-radius: 999px;
+  padding: 10px 22px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: filter 120ms, background 120ms;
+  white-space: nowrap;
+}
+button:disabled { opacity: 0.6; cursor: default; }
+button:not(:disabled):hover { filter: brightness(0.95); }
+
+.filled-button { background: var(--md-primary); color: var(--md-on-primary); }
+.tonal-button { background: var(--md-secondary-container); color: var(--md-on-surface); }
+.outlined-button { background: transparent; color: var(--md-primary); border: 1px solid var(--md-outline); }
+.text-button { background: transparent; color: var(--md-primary); padding: 10px 12px; }
+
+.actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; margin-top: 4px; }
+
+.notice {
+  border-radius: var(--radius-m);
+  padding: 12px 16px;
+  font-size: 0.93rem;
+}
+.notice-info { background: var(--md-primary-container); }
+.notice-warn { background: var(--md-secondary-container); }
+.notice-error { background: var(--md-error-container); color: var(--md-error); }
+.status:empty { display: none; }
+
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+.facts dt { color: color-mix(in srgb, var(--md-on-surface) 60%, transparent); font-size: 0.9rem; }
+.facts dd { margin: 0; }
+
+.bottom {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 16px 24px 24px;
+  font-size: 0.8rem;
+  color: color-mix(in srgb, var(--md-on-surface) 60%, transparent);
+}
+.bottom a { color: var(--md-primary); }
+.dot { opacity: 0.5; }
+
+@media (max-width: 480px) {
+  .card { padding: 24px 18px; border-radius: var(--radius-m); }
+  .row { flex-wrap: wrap; }
+  .row > input { flex-basis: 100%; }
+}
