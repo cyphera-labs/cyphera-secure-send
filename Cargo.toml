@@ -2,7 +2,7 @@
 name = "cyphera-secure-send"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "One-time secret handoff for controlled environments. Client-side encryption, ephemeral in-memory storage, one binary."
 license = "Apache-2.0"
 repository = "https://github.com/cyphera-labs/cyphera-secure-send"
