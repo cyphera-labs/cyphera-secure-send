@@ -1,5 +1,15 @@
 # Cyphera SecureSend
 
+[![ci](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/ci.yml/badge.svg)](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/ci.yml)
+[![security](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/security.yml/badge.svg)](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/security.yml)
+[![codeql](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/codeql.yml/badge.svg)](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cyphera-labs/cyphera-secure-send/badge)](https://scorecard.dev/viewer/?uri=github.com/cyphera-labs/cyphera-secure-send)
+[![Quality gate](https://sonarcloud.io/api/project_badges/measure?project=cyphera-labs_cyphera-secure-send&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=cyphera-labs_cyphera-secure-send)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=cyphera-labs_cyphera-secure-send&metric=coverage)](https://sonarcloud.io/summary/new_code?id=cyphera-labs_cyphera-secure-send)
+[![Release](https://img.shields.io/github/v/release/cyphera-labs/cyphera-secure-send?include_prereleases&sort=semver)](https://github.com/cyphera-labs/cyphera-secure-send/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](Cargo.toml)
+
 One-time secret handoff for controlled environments.
 
 Somebody has to give Bob the temporary password, the API key, the initial
@@ -91,6 +101,24 @@ threat model: [docs/security-model.md](docs/security-model.md).
 | `GET /v1/ui-config` | branding and limits for the interface |
 | `GET /v1/health` | `{"status":"ok"}` |
 | `GET /livez`, `/readyz`, `/metrics` | management listener |
+
+## Supply chain and quality
+
+Every push runs the same gates a release does, and every release ships what a
+security review asks for.
+
+| | |
+|---|---|
+| **Tests** | Rust unit and HTTP tests, property-based tests on every parser that sees untrusted input, browser tests in Chromium including the double-read race |
+| **Static analysis** | Clippy with warnings denied, CodeQL for Rust and TypeScript, Semgrep, SonarQube quality gate with coverage from `cargo llvm-cov` and Vitest |
+| **Dependencies** | `cargo-deny` for advisories, licenses, and sources; `npm audit`; Dependabot weekly across Cargo, npm, Actions, and Docker; dependency review on pull requests |
+| **Secrets** | Trufflehog and Gitleaks over the full history on every push |
+| **Workflows** | Every action pinned to a commit SHA, `actionlint` on every change, least-privilege tokens, OpenSSF Scorecard weekly |
+| **Releases** | Binaries for amd64 and arm64, multi-arch image on a digest-pinned minimal base, CycloneDX and SPDX SBOMs, Sigstore signatures on every artifact, SLSA build provenance attestations |
+| **Container** | Single binary, `nonroot`, no shell, read-only filesystem and dropped capabilities supported |
+
+The verification commands are in every release's notes and in
+[docs/deployment.md](docs/deployment.md).
 
 ## Building
 

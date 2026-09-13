@@ -1,0 +1,35 @@
+name: Bug report
+description: Something does not behave as documented.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `cyphera-secure-send --version`, or the image tag.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration and logs
+      description: Effective configuration (`check-config`) and relevant log or audit lines. Remove anything sensitive.
+      render: text

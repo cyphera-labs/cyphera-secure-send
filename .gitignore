@@ -6,3 +6,4 @@
 *.log
 .DS_Store
 /config/local*
+/web/coverage

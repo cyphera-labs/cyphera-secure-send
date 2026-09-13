@@ -16,3 +16,8 @@ Initial implementation.
   support link.
 - Container image on a minimal nonroot base; release workflow with signed
   artifacts, SBOMs, and provenance.
+- Security workflow: actionlint, Trufflehog, Gitleaks, cargo-deny, npm audit,
+  Semgrep, dependency review; CodeQL for both languages; OpenSSF Scorecard;
+  SonarQube with coverage from cargo-llvm-cov and Vitest; every action pinned
+  to a commit; Dependabot with a cooldown; property-based tests on every
+  parser that sees untrusted input.
