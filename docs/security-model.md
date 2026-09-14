@@ -98,10 +98,13 @@ Each of these is enforced by a test.
 14. Only JSON bodies with `Content-Type: application/json` are accepted, and
     there is no CORS policy, so a cross-origin page cannot make the API do
     anything: the preflight fails.
-15. In OIDC mode, authorization is decided inside the same atomic step as the
+15. In OIDC mode, what a caller may take is decided from the caller alone,
+    before the store is touched, as plain data (deny, or the recipient the
+    message must name), and enforced inside the same atomic step as the
     proof check and before it: a caller who is not the named recipient gets
     the generic answer, the message is untouched, and no proof attempt is
-    counted.
+    counted. Being data rather than code, the rule can travel into a shared
+    store's own atomic operation unchanged.
 16. The sender of a message is the signed-in identity whenever there is one;
     the typed field is ignored.
 17. A login completes only in the browser that started it (state bound to a

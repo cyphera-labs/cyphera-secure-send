@@ -1,6 +1,8 @@
 //! Audit events: lifecycle metadata only. By construction an event cannot
 //! carry plaintext, a password, a key, a proof, a verifier, a link secret, a
-//! revoke token, or a usable URL; none of those types appear in `AuditEvent`.
+//! revoke token, a usable URL, or any free text: every field is a typed
+//! identifier, an address, a timestamp, a count, or an enumerated code.
+//! Diagnostics belong in the application log, not here.
 
 use serde::Serialize;
 use std::io::Write;
@@ -70,6 +72,7 @@ pub enum Reason {
     Consume,
     Revoke,
     ProviderError,
+    IncompleteResponse,
     StateMismatch,
     TokenRejected,
 }
@@ -105,8 +108,6 @@ pub struct AuditEvent {
     pub issuer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_messages: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
 }
 
 impl AuditEvent {
@@ -130,7 +131,6 @@ impl AuditEvent {
             subject: None,
             issuer: None,
             active_messages: None,
-            detail: None,
         }
     }
 

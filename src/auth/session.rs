@@ -1,6 +1,9 @@
-//! Server-side sessions and the cookies that reference them. Sessions live in
-//! memory with a lifetime; the browser holds only an opaque random id.
+//! Server-side sessions, pending logins, and the cookies that reference them.
+//! The browser holds only an opaque random id. The store is a trait so that a
+//! multi-instance deployment can keep this state in a shared store; the
+//! default keeps it in process memory with a lifetime.
 
+use async_trait::async_trait;
 use moka::future::Cache;
 use std::time::Duration;
 use time::OffsetDateTime;
@@ -25,13 +28,32 @@ pub struct PendingLogin {
     pub next: String,
 }
 
-pub struct SessionStore {
+/// Where sessions and pending logins live. Every operation is atomic with
+/// respect to the others for the same key; `take_login` in particular must
+/// remove and return in one step so a state value can only be used once.
+#[async_trait]
+pub trait SessionStore: Send + Sync {
+    fn session_ttl(&self) -> Duration;
+    async fn start_login(&self, state: String, pending: PendingLogin);
+    /// Removes and returns the pending login: a state value works once.
+    async fn take_login(&self, state: &str) -> Option<PendingLogin>;
+    async fn create(
+        &self,
+        subject: String,
+        email: Email,
+        issuer: String,
+    ) -> Result<(String, Session), ()>;
+    async fn get(&self, id: &str) -> Option<Session>;
+    async fn revoke(&self, id: &str);
+}
+
+pub struct MemorySessionStore {
     sessions: Cache<String, Session>,
     pending: Cache<String, PendingLogin>,
     session_ttl: Duration,
 }
 
-impl SessionStore {
+impl MemorySessionStore {
     pub fn new(session_ttl: Duration, login_ttl: Duration) -> Self {
         Self {
             sessions: Cache::builder()
@@ -45,21 +67,23 @@ impl SessionStore {
             session_ttl,
         }
     }
+}
 
-    pub fn session_ttl(&self) -> Duration {
+#[async_trait]
+impl SessionStore for MemorySessionStore {
+    fn session_ttl(&self) -> Duration {
         self.session_ttl
     }
 
-    pub async fn start_login(&self, state: String, pending: PendingLogin) {
+    async fn start_login(&self, state: String, pending: PendingLogin) {
         self.pending.insert(state, pending).await;
     }
 
-    /// Removes and returns the pending login: a state value works once.
-    pub async fn take_login(&self, state: &str) -> Option<PendingLogin> {
+    async fn take_login(&self, state: &str) -> Option<PendingLogin> {
         self.pending.remove(state).await
     }
 
-    pub async fn create(
+    async fn create(
         &self,
         subject: String,
         email: Email,
@@ -77,7 +101,7 @@ impl SessionStore {
         Ok((id, session))
     }
 
-    pub async fn get(&self, id: &str) -> Option<Session> {
+    async fn get(&self, id: &str) -> Option<Session> {
         let session = self.sessions.get(id).await?;
         if session.expires_at <= OffsetDateTime::now_utc() {
             self.sessions.remove(id).await;
@@ -86,7 +110,7 @@ impl SessionStore {
         Some(session)
     }
 
-    pub async fn revoke(&self, id: &str) {
+    async fn revoke(&self, id: &str) {
         self.sessions.remove(id).await;
     }
 }
@@ -161,7 +185,7 @@ mod tests {
 
     #[tokio::test]
     async fn pending_logins_are_single_use_and_sessions_round_trip() {
-        let store = SessionStore::new(Duration::from_secs(60), Duration::from_secs(60));
+        let store = MemorySessionStore::new(Duration::from_secs(60), Duration::from_secs(60));
         store
             .start_login(
                 "st".into(),

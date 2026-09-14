@@ -15,9 +15,50 @@ pub enum StoreError {
     Unavailable(String),
 }
 
-/// Decides, inside the atomic take, whether the caller may have this message.
-/// Evaluated before the proof, so a denied caller neither burns nor learns.
-pub type TakeGuard<'a> = &'a (dyn Fn(&StoredMessage) -> bool + Send + Sync);
+/// What the caller is allowed to take, decided from the caller alone before
+/// the store is touched, and evaluated inside the atomic step before the
+/// proof so a denied caller neither burns nor learns. Plain data on purpose:
+/// a distributed store has to carry it into its own atomic operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TakePolicy {
+    /// The caller may not take anything.
+    pub deny: bool,
+    /// The message's recipient must equal this address (case-insensitive).
+    pub expected_recipient: Option<crate::domain::Email>,
+}
+
+impl TakePolicy {
+    pub fn allow_any() -> Self {
+        Self {
+            deny: false,
+            expected_recipient: None,
+        }
+    }
+
+    pub fn deny_all() -> Self {
+        Self {
+            deny: true,
+            expected_recipient: None,
+        }
+    }
+
+    pub fn only(recipient: crate::domain::Email) -> Self {
+        Self {
+            deny: false,
+            expected_recipient: Some(recipient),
+        }
+    }
+
+    pub fn permits(&self, recipient: &crate::domain::Email) -> bool {
+        if self.deny {
+            return false;
+        }
+        match &self.expected_recipient {
+            None => true,
+            Some(expected) => expected.as_str().eq_ignore_ascii_case(recipient.as_str()),
+        }
+    }
+}
 
 /// Result of an atomic take. Only `Taken` carries the message; every other
 /// variant is reported to the client identically.
@@ -56,7 +97,7 @@ pub struct StoreStats {
 #[async_trait]
 pub trait MessageStore: Send + Sync {
     async fn put(&self, message: StoredMessage) -> Result<(), StoreError>;
-    async fn take(&self, id: &MessageId, proof: &Proof, allow: TakeGuard<'_>) -> TakeOutcome;
+    async fn take(&self, id: &MessageId, proof: &Proof, policy: &TakePolicy) -> TakeOutcome;
     async fn revoke(&self, id: &MessageId, token: &RevokeToken) -> RevokeOutcome;
     /// Exact figures; implementations settle pending housekeeping first.
     async fn stats(&self) -> StoreStats;

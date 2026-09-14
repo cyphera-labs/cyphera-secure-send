@@ -242,11 +242,8 @@ impl MessageService {
             return None;
         };
 
-        let authorizer = self.authorizer.clone();
-        let guard = move |m: &StoredMessage| {
-            authorizer.authorize_consume(principal, &m.recipient) == Decision::Allow
-        };
-        match self.store.take(&id, &proof, &guard).await {
+        let policy = self.authorizer.consume_policy(principal);
+        match self.store.take(&id, &proof, &policy).await {
             TakeOutcome::Taken(message) => {
                 let message = *message;
                 metrics::counter!("securesend_messages_consumed_total").increment(1);

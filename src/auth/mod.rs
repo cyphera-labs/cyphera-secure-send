@@ -7,6 +7,7 @@ pub mod oidc;
 pub mod session;
 
 use crate::domain::Email;
+use crate::storage::TakePolicy;
 
 /// The caller as established by the request layer.
 #[derive(Clone, Debug, Default)]
@@ -42,8 +43,9 @@ pub trait ConsumeAuthorizer: Send + Sync {
         sender: &Email,
         recipient: &Email,
     ) -> Decision;
-    /// May this principal consume a message addressed to `recipient`?
-    fn authorize_consume(&self, principal: &RequestPrincipal, recipient: &Email) -> Decision;
+    /// What this principal may take. Decided before the store is touched and
+    /// enforced inside the store's atomic step.
+    fn consume_policy(&self, principal: &RequestPrincipal) -> TakePolicy;
 }
 
 /// Standalone mode: anyone with the link and the password.
@@ -54,8 +56,8 @@ impl ConsumeAuthorizer for AnonymousAuthorizer {
         Decision::Allow
     }
 
-    fn authorize_consume(&self, _: &RequestPrincipal, _: &Email) -> Decision {
-        Decision::Allow
+    fn consume_policy(&self, _: &RequestPrincipal) -> TakePolicy {
+        TakePolicy::allow_any()
     }
 }
 
@@ -105,23 +107,24 @@ impl ConsumeAuthorizer for OidcAuthorizer {
         }
     }
 
-    fn authorize_consume(&self, principal: &RequestPrincipal, recipient: &Email) -> Decision {
+    fn consume_policy(&self, principal: &RequestPrincipal) -> TakePolicy {
         match &principal.email {
             None => {
                 if self.anonymous_consume {
-                    Decision::Allow
+                    TakePolicy::allow_any()
                 } else {
-                    Decision::Deny
+                    TakePolicy::deny_all()
                 }
             }
             Some(me) => {
                 if !self.domain_allowed(me) {
-                    return Decision::Deny;
+                    return TakePolicy::deny_all();
                 }
-                if self.require_recipient_match && !same_address(me, recipient) {
-                    return Decision::Deny;
+                if self.require_recipient_match {
+                    TakePolicy::only(me.clone())
+                } else {
+                    TakePolicy::allow_any()
                 }
-                Decision::Allow
             }
         }
     }
@@ -163,9 +166,9 @@ mod tests {
             ),
             Decision::Deny
         );
-        assert_eq!(
-            a.authorize_consume(&RequestPrincipal::anonymous(), &e("b@acme.com")),
-            Decision::Deny
+        assert!(
+            !a.consume_policy(&RequestPrincipal::anonymous())
+                .permits(&e("b@acme.com"))
         );
     }
 
@@ -217,27 +220,28 @@ mod tests {
     #[test]
     fn recipient_binding_admits_only_the_named_reader() {
         let a = closed();
-        assert_eq!(
-            a.authorize_consume(&p("bob@acme.com"), &e("bob@acme.com")),
-            Decision::Allow
+        assert!(
+            a.consume_policy(&p("bob@acme.com"))
+                .permits(&e("bob@acme.com"))
         );
-        assert_eq!(
-            a.authorize_consume(&p("Bob@acme.com"), &e("bob@acme.com")),
-            Decision::Allow
+        assert!(
+            a.consume_policy(&p("Bob@acme.com"))
+                .permits(&e("bob@acme.com"))
         );
-        assert_eq!(
-            a.authorize_consume(&p("carol@acme.com"), &e("bob@acme.com")),
-            Decision::Deny
+        assert!(
+            !a.consume_policy(&p("carol@acme.com"))
+                .permits(&e("bob@acme.com"))
         );
         let mut open = closed();
         open.require_recipient_match = false;
-        assert_eq!(
-            open.authorize_consume(&p("carol@acme.com"), &e("bob@acme.com")),
-            Decision::Allow
+        assert!(
+            open.consume_policy(&p("carol@acme.com"))
+                .permits(&e("bob@acme.com"))
         );
-        assert_eq!(
-            open.authorize_consume(&p("carol@other.com"), &e("bob@acme.com")),
-            Decision::Deny
+        assert!(
+            !open
+                .consume_policy(&p("carol@other.com"))
+                .permits(&e("bob@acme.com"))
         );
     }
 
@@ -245,9 +249,9 @@ mod tests {
     fn opening_anonymous_paths_is_explicit() {
         let mut a = closed();
         a.anonymous_consume = true;
-        assert_eq!(
-            a.authorize_consume(&RequestPrincipal::anonymous(), &e("bob@acme.com")),
-            Decision::Allow
+        assert!(
+            a.consume_policy(&RequestPrincipal::anonymous())
+                .permits(&e("bob@acme.com"))
         );
         a.anonymous_create = true;
         assert_eq!(

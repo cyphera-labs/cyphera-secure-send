@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 
-use super::{MessageStore, RevokeOutcome, StoreError, StoreStats, TakeGuard, TakeOutcome};
+use super::{MessageStore, RevokeOutcome, StoreError, StoreStats, TakeOutcome, TakePolicy};
 use crate::audit::{AuditEvent, AuditEventType, AuditSink};
 use crate::domain::{MessageId, Proof, RevokeToken, StoredMessage, Verifier};
 
@@ -119,20 +119,22 @@ impl MessageStore for MemoryStore {
         Ok(())
     }
 
-    async fn take(&self, id: &MessageId, proof: &Proof, allow: TakeGuard<'_>) -> TakeOutcome {
+    async fn take(&self, id: &MessageId, proof: &Proof, policy: &TakePolicy) -> TakeOutcome {
         let max = self.max_failed_proofs;
         let proof = proof.clone();
+        let policy = policy.clone();
         let result = self
             .cache
             .entry(id.clone())
             .and_compute_with(|entry| {
                 let proof = proof.clone();
+                let policy = policy.clone();
                 async move {
                     match entry {
                         None => Op::Nop,
                         Some(e) => {
                             let current = e.into_value();
-                            if !allow(&current) {
+                            if !policy.permits(&current.recipient) {
                                 return Op::Nop;
                             }
                             let matched = current.verifier.matches(&proof);
@@ -262,11 +264,11 @@ mod tests {
         let id = m.id.clone();
         s.put(m).await.unwrap();
         assert!(matches!(
-            s.take(&id, &proof, &|_| true).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await,
             TakeOutcome::Taken(_)
         ));
         assert!(matches!(
-            s.take(&id, &proof, &|_| true).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await,
             TakeOutcome::Missing
         ));
     }
@@ -292,7 +294,7 @@ mod tests {
             );
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
-                if let TakeOutcome::Taken(_) = s.take(&id, &proof, &|_| true).await {
+                if let TakeOutcome::Taken(_) = s.take(&id, &proof, &TakePolicy::allow_any()).await {
                     wins.fetch_add(1, Ordering::SeqCst);
                 }
             }));
@@ -313,19 +315,19 @@ mod tests {
         s.put(m).await.unwrap();
         let wrong = Secret::generate().unwrap();
         assert!(matches!(
-            s.take(&id, &wrong, &|_| true).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
             TakeOutcome::WrongProof { failed_proofs: 1 }
         ));
         assert!(matches!(
-            s.take(&id, &wrong, &|_| true).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
             TakeOutcome::WrongProof { failed_proofs: 2 }
         ));
         assert!(matches!(
-            s.take(&id, &wrong, &|_| true).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
             TakeOutcome::Burned { failed_proofs: 3 }
         ));
         assert!(matches!(
-            s.take(&id, &proof, &|_| true).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await,
             TakeOutcome::Missing
         ));
     }
@@ -338,13 +340,13 @@ mod tests {
         s.put(m).await.unwrap();
         let wrong = Secret::generate().unwrap();
         assert!(matches!(
-            s.take(&id, &wrong, &|_| true).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
             TakeOutcome::WrongProof { .. }
         ));
         tokio::time::sleep(Duration::from_millis(1300)).await;
         s.run_pending_tasks().await;
         assert!(matches!(
-            s.take(&id, &wrong, &|_| true).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
             TakeOutcome::Missing
         ));
     }
@@ -359,7 +361,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1300)).await;
         s.run_pending_tasks().await;
         assert!(matches!(
-            s.take(&id, &proof, &|_| true).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await,
             TakeOutcome::Missing
         ));
         let events = sink.events();
@@ -370,22 +372,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refusing_guard_leaves_the_message_untouched() {
+    async fn a_refusing_policy_leaves_the_message_untouched() {
         let s = store(Arc::new(MemorySink::default()));
         let (m, proof, _) = message(60);
         let id = m.id.clone();
         s.put(m).await.unwrap();
-        match s.take(&id, &proof, &|_| false).await {
+        match s.take(&id, &proof, &TakePolicy::deny_all()).await {
             TakeOutcome::Denied { recipient } => assert_eq!(recipient.as_str(), "b@example.com"),
             other => panic!("expected Denied, got {other:?}"),
         }
         let wrong = Secret::generate().unwrap();
         assert!(matches!(
-            s.take(&id, &wrong, &|_| false).await,
+            s.take(&id, &wrong, &TakePolicy::deny_all()).await,
             TakeOutcome::Denied { .. }
         ));
         assert!(matches!(
-            s.take(&id, &proof, &|_| true).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await,
             TakeOutcome::Taken(_)
         ));
     }
@@ -401,7 +403,7 @@ mod tests {
         assert_eq!(s.revoke(&id, &revoke).await, RevokeOutcome::Revoked);
         assert_eq!(s.revoke(&id, &revoke).await, RevokeOutcome::Missing);
         assert!(matches!(
-            s.take(&id, &proof, &|_| true).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await,
             TakeOutcome::Missing
         ));
     }

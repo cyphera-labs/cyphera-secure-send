@@ -95,15 +95,15 @@ pub async fn callback(
         .remove(oidc.cookies.removal(oidc.cookies.login_name()));
 
     if let Some(err) = q.error {
-        let mut event = AuditEvent::failure(AuditEventType::AuthLoginFailed, Reason::ProviderError)
-            .with_client(&ctx);
-        event.detail = Some(
-            format!("{err}: {}", q.error_description.unwrap_or_default())
-                .chars()
-                .take(200)
-                .collect(),
+        tracing::warn!(
+            error = %sanitize(&err),
+            description = %sanitize(q.error_description.as_deref().unwrap_or_default()),
+            "provider reported a sign-in error"
         );
-        state.audit.emit(event);
+        state.audit.emit(
+            AuditEvent::failure(AuditEventType::AuthLoginFailed, Reason::ProviderError)
+                .with_client(&ctx),
+        );
         return (
             StatusCode::BAD_REQUEST,
             remove_login,
@@ -113,6 +113,10 @@ pub async fn callback(
     }
 
     let (Some(code), Some(returned_state)) = (q.code, q.state) else {
+        state.audit.emit(
+            AuditEvent::failure(AuditEventType::AuthLoginFailed, Reason::IncompleteResponse)
+                .with_client(&ctx),
+        );
         return (
             StatusCode::BAD_REQUEST,
             remove_login,
@@ -152,11 +156,11 @@ pub async fn callback(
         }
         Err(e) => {
             metrics::counter!("securesend_auth_failures_total").increment(1);
-            let mut event =
+            tracing::warn!(error = %sanitize(&e.to_string()), "sign-in could not be completed");
+            state.audit.emit(
                 AuditEvent::failure(AuditEventType::AuthLoginFailed, Reason::TokenRejected)
-                    .with_client(&ctx);
-            event.detail = Some(e.to_string().chars().take(200).collect());
-            state.audit.emit(event);
+                    .with_client(&ctx),
+            );
             (
                 StatusCode::UNAUTHORIZED,
                 remove_login,
@@ -188,6 +192,12 @@ pub async fn logout(
     }
     let jar = jar.remove(oidc.cookies.removal(oidc.cookies.session_name()));
     (StatusCode::NO_CONTENT, jar).into_response()
+}
+
+/// Provider-supplied text goes to the application log only, bounded and
+/// stripped of control characters.
+fn sanitize(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).take(200).collect()
 }
 
 fn client_context(state: &SharedState, peer: SocketAddr, headers: &HeaderMap) -> ClientContext {

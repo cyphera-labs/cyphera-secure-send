@@ -11,9 +11,10 @@ use openidconnect::{
 use std::time::Duration;
 use url::Url;
 
-use super::session::{CookieSpec, PendingLogin, Session, SessionStore};
+use super::session::{CookieSpec, MemorySessionStore, PendingLogin, Session, SessionStore};
 use crate::config::{EmailClaim, OidcSettings};
 use crate::domain::Email;
+use std::sync::Arc;
 
 type Client = CoreClient<
     EndpointSet,
@@ -54,7 +55,7 @@ pub struct OidcProvider {
     issuer: String,
     scopes: Vec<String>,
     email_claim: EmailClaim,
-    pub sessions: SessionStore,
+    pub sessions: Arc<dyn SessionStore>,
     pub cookies: CookieSpec,
     login_ttl: Duration,
 }
@@ -110,10 +111,10 @@ impl OidcProvider {
             issuer: settings.issuer.clone(),
             scopes: settings.scopes.clone(),
             email_claim: settings.email_claim,
-            sessions: SessionStore::new(
+            sessions: Arc::new(MemorySessionStore::new(
                 Duration::from_secs(settings.session_ttl_seconds),
                 Duration::from_secs(settings.login_ttl_seconds),
-            ),
+            )),
             cookies: CookieSpec {
                 secure: secure_cookies,
             },
