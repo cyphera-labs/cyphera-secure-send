@@ -4,6 +4,15 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  # Marvin attack: a timing side channel in RSA private-key operations in the
+  # rsa crate, with no fixed release. The service reaches rsa only through the
+  # OpenID Connect library, which uses it to verify provider signatures with
+  # the public key, and through a test-only token signer. No RSA private key
+  # exists in the process, so there is nothing for the attack to recover.
+  # Revisit whenever rsa publishes a fix.
+  { id = "RUSTSEC-2023-0071", reason = "RSA is used for public-key signature verification only; no private-key operation exists in the service" },
+]
 
 [licenses]
 version = 2

@@ -25,6 +25,17 @@ plaintext or key material reaching the server, a message delivered twice, a
 secret in a log or audit event, a way to tell whether a message exists, a
 bypass of size or rate limits, or a header or CSP regression.
 
+## Accepted advisories
+
+Dependency advisories that apply to a code path this service does not use
+are recorded in `deny.toml` with the reason, so the audit stays green
+without hiding anything. At present:
+
+- **RUSTSEC-2023-0071** (`rsa`, Marvin timing attack). Reached only through
+  the OpenID Connect library's signature verification, a public-key
+  operation. The attack targets private-key operations, and no RSA private
+  key exists in the process.
+
 ## Supported versions
 
 The latest release. Fixes are not backported.
