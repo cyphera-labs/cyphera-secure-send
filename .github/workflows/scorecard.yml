@@ -15,6 +15,9 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    # The default token cannot read a private repository's history, which the
+    # analysis needs; the job runs once the repository is public.
+    if: ${{ !github.event.repository.private }}
     permissions:
       contents: read
       id-token: write
@@ -29,13 +32,12 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
-          publish_results: ${{ !github.event.repository.private }}
+          publish_results: true
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: scorecard-results
           path: results.sarif
           retention-days: 7
-      - if: ${{ !github.event.repository.private }}
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+      - uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
         with:
           sarif_file: results.sarif

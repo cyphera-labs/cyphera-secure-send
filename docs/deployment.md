@@ -36,7 +36,9 @@ Run it like any stateless service. What matters:
   needs roughly that plus 64 MiB. Set the container limit accordingly.
 - **Replicas.** One. The memory backend is per-process; a second replica has
   its own, separate set of messages, and a load balancer would send the
-  recipient to the wrong one. Clustering arrives with the Redis backend.
+  recipient to the wrong one. One process covers a large organization: the
+  default budget holds thousands of maximum-size messages, and a restart takes
+  well under a second.
 - **Proxy.** Set `server.trusted_proxies` to your ingress's address range so
   rate limiting and audit see the real client address.
 - **TLS.** Terminate at the ingress, or set `server.tls.cert_path` and

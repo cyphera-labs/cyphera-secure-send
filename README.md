@@ -141,10 +141,9 @@ cd web && npm test && npx playwright install chromium && npm run e2e
 
 ## Status
 
-Alpha. The API and configuration keys may still change before 1.0. Planned
-next: an OIDC mode that closes anonymous use and binds recipients to an
-identity, a Redis backend for clustering, and syslog and webhook audit sinks.
-The core is built so those arrive as adapters, not rewrites.
+Alpha. The API and configuration keys may still change before 1.0. The core
+protocol and the one-time semantics are complete and tested; the service has
+not been externally audited.
 
 ## License
 

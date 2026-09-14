@@ -62,7 +62,7 @@ stores only its hash, so a memory dump does not yield a usable proof either.
 
 Mixing a 256-bit link secret into the key derivation means that:
 
-- ciphertext obtained from the server (memory dump, a future Redis snapshot)
+- ciphertext obtained from the server (a memory dump, or a copy of any store)
   cannot be attacked without the link, however weak the password;
 - a captured link is useless without the password;
 - the verifier cannot be used to guess the password without the link.
@@ -104,7 +104,7 @@ Each of these is enforced by a test.
 | Threat | Covered | How |
 |---|---|---|
 | Passive observer on the network | yes | TLS, and nothing useful in URLs anyway |
-| Server operator, memory dump, future Redis snapshot | yes | ciphertext, hashes, and a verifier that cannot be attacked without the link |
+| Server operator, memory dump, copy of the store | yes | ciphertext, hashes, and a verifier that cannot be attacked without the link |
 | Link intercepted, password not | yes | the proof cannot be derived; wrong proofs are counted and the message burns |
 | Password intercepted, link not | yes | nothing to attack |
 | Link and ciphertext both obtained | partly | bounded by password strength and PBKDF2 cost; the interface offers a generated password |
