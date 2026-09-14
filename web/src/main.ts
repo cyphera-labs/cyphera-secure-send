@@ -1,10 +1,42 @@
 import "./styles.css";
-import { ApiError, api, loadUiConfig, type UiConfig } from "./api";
+import { ApiError, api, loadSession, loadUiConfig, logout, type SessionView, type UiConfig } from "./api";
 import { decodeFragment, encodeFragment, open, proofFor, seal, suggestPassword } from "./crypto";
 import { byteLength, clear, copyToClipboard, formatDuration, formatTime, h } from "./dom";
 
 const root = document.getElementById("app") as HTMLElement;
 let config: UiConfig;
+let session: SessionView = { authenticated: false };
+const FRAGMENT_KEY = "securesend.fragment";
+
+function needsSignIn(): boolean {
+  return config.auth_mode === "oidc" && !session.authenticated;
+}
+
+/** Sends the browser to the provider. The fragment never reaches the server,
+ *  so it is parked in sessionStorage for the trip and restored on return. */
+function signIn(next: string): void {
+  try {
+    if (location.hash.length > 1) sessionStorage.setItem(FRAGMENT_KEY, `${location.pathname}${location.hash}`);
+  } catch {
+    // storage unavailable: the user re-opens the full link after signing in
+  }
+  location.assign(`/auth/login?next=${encodeURIComponent(next)}`);
+}
+
+function restoreFragment(): void {
+  if (location.hash.length > 1) return;
+  try {
+    const saved = sessionStorage.getItem(FRAGMENT_KEY);
+    if (!saved) return;
+    sessionStorage.removeItem(FRAGMENT_KEY);
+    const hashAt = saved.indexOf("#");
+    if (hashAt > 0 && saved.slice(0, hashAt) === location.pathname) {
+      history.replaceState(null, "", saved);
+    }
+  } catch {
+    // nothing to restore
+  }
+}
 
 function applyBranding(c: UiConfig): void {
   const s = document.documentElement.style;
@@ -26,7 +58,26 @@ function header(): HTMLElement {
   if (config.company_name) name.append(h("span", { class: "brand-company" }, config.company_name), " ");
   name.append(config.product_name);
   brand.append(name);
-  return h("header", { class: "top" }, brand);
+  const header = h("header", { class: "top" }, brand);
+  if (config.auth_mode === "oidc" && session.authenticated) {
+    header.append(
+      h("div", { class: "who" },
+        h("span", { class: "who-email" }, session.email ?? ""),
+        h("button", { type: "button", class: "text-button", onclick: async () => { await logout(); location.assign("/"); } }, "Sign out"),
+      ),
+    );
+  }
+  return header;
+}
+
+function signInCard(title: string, text: string, next: string): void {
+  page(
+    h("section", { class: "card" },
+      h("h1", {}, title),
+      h("p", {}, text),
+      h("div", { class: "actions" }, h("button", { type: "button", class: "filled-button", onclick: () => signIn(next) }, "Sign in")),
+    ),
+  );
 }
 
 function footer(): HTMLElement {
@@ -76,7 +127,16 @@ function describeError(e: unknown, fallback: string): string {
 // ---------------------------------------------------------------- compose
 
 function compose(): void {
+  if (needsSignIn()) {
+    signInCard(config.product_name, "Sign in to send a secure message.", "/");
+    return;
+  }
   const sender = h("input", { type: "email", name: "sender", autocomplete: "email", required: true, maxlength: "254", spellcheck: "false" });
+  if (session.authenticated && session.email) {
+    sender.value = session.email;
+    sender.readOnly = true;
+    sender.classList.add("readonly");
+  }
   const recipient = h("input", { type: "email", name: "recipient", autocomplete: "off", required: true, maxlength: "254", spellcheck: "false" });
   const message = h("textarea", { name: "message", rows: "8", required: true, spellcheck: "false", autocomplete: "off" });
   const password = h("input", { type: "password", name: "password", autocomplete: "new-password", required: true, minlength: "8", spellcheck: "false" });
@@ -166,7 +226,8 @@ function compose(): void {
   }
 
   page(form);
-  sender.focus();
+  if (sender.readOnly) recipient.focus();
+  else sender.focus();
 }
 
 interface CreatedInfo {
@@ -238,6 +299,10 @@ function unavailable(): void {
 }
 
 function reveal(id: string): void {
+  if (needsSignIn()) {
+    signInCard("You have a secure message", "Sign in to read it. The message can be viewed only once, by the person it was sent to.", `/m/${id}`);
+    return;
+  }
   const params = decodeFragment(location.hash);
   if (!params) {
     page(
@@ -368,6 +433,10 @@ async function boot(): Promise<void> {
     return;
   }
   applyBranding(config);
+  if (config.auth_mode === "oidc") {
+    session = await loadSession();
+    restoreFragment();
+  }
   route();
 }
 

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 
-use super::{MessageStore, RevokeOutcome, StoreError, StoreStats, TakeOutcome};
+use super::{MessageStore, RevokeOutcome, StoreError, StoreStats, TakeGuard, TakeOutcome};
 use crate::audit::{AuditEvent, AuditEventType, AuditSink};
 use crate::domain::{MessageId, Proof, RevokeToken, StoredMessage, Verifier};
 
@@ -119,7 +119,7 @@ impl MessageStore for MemoryStore {
         Ok(())
     }
 
-    async fn take(&self, id: &MessageId, proof: &Proof) -> TakeOutcome {
+    async fn take(&self, id: &MessageId, proof: &Proof, allow: TakeGuard<'_>) -> TakeOutcome {
         let max = self.max_failed_proofs;
         let proof = proof.clone();
         let result = self
@@ -132,6 +132,9 @@ impl MessageStore for MemoryStore {
                         None => Op::Nop,
                         Some(e) => {
                             let current = e.into_value();
+                            if !allow(&current) {
+                                return Op::Nop;
+                            }
                             let matched = current.verifier.matches(&proof);
                             if matched || current.failed_proofs + 1 >= max {
                                 Op::Remove
@@ -165,7 +168,10 @@ impl MessageStore for MemoryStore {
             CompResult::ReplacedWith(entry) => TakeOutcome::WrongProof {
                 failed_proofs: entry.into_value().failed_proofs,
             },
-            CompResult::Inserted(_) | CompResult::Unchanged(_) => TakeOutcome::Missing,
+            CompResult::Unchanged(entry) => TakeOutcome::Denied {
+                recipient: entry.into_value().recipient,
+            },
+            CompResult::Inserted(_) => TakeOutcome::Missing,
         }
     }
 
@@ -255,8 +261,14 @@ mod tests {
         let (m, proof, _) = message(60);
         let id = m.id.clone();
         s.put(m).await.unwrap();
-        assert!(matches!(s.take(&id, &proof).await, TakeOutcome::Taken(_)));
-        assert!(matches!(s.take(&id, &proof).await, TakeOutcome::Missing));
+        assert!(matches!(
+            s.take(&id, &proof, &|_| true).await,
+            TakeOutcome::Taken(_)
+        ));
+        assert!(matches!(
+            s.take(&id, &proof, &|_| true).await,
+            TakeOutcome::Missing
+        ));
     }
 
     #[tokio::test]
@@ -280,7 +292,7 @@ mod tests {
             );
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
-                if let TakeOutcome::Taken(_) = s.take(&id, &proof).await {
+                if let TakeOutcome::Taken(_) = s.take(&id, &proof, &|_| true).await {
                     wins.fetch_add(1, Ordering::SeqCst);
                 }
             }));
@@ -301,18 +313,21 @@ mod tests {
         s.put(m).await.unwrap();
         let wrong = Secret::generate().unwrap();
         assert!(matches!(
-            s.take(&id, &wrong).await,
+            s.take(&id, &wrong, &|_| true).await,
             TakeOutcome::WrongProof { failed_proofs: 1 }
         ));
         assert!(matches!(
-            s.take(&id, &wrong).await,
+            s.take(&id, &wrong, &|_| true).await,
             TakeOutcome::WrongProof { failed_proofs: 2 }
         ));
         assert!(matches!(
-            s.take(&id, &wrong).await,
+            s.take(&id, &wrong, &|_| true).await,
             TakeOutcome::Burned { failed_proofs: 3 }
         ));
-        assert!(matches!(s.take(&id, &proof).await, TakeOutcome::Missing));
+        assert!(matches!(
+            s.take(&id, &proof, &|_| true).await,
+            TakeOutcome::Missing
+        ));
     }
 
     #[tokio::test]
@@ -323,12 +338,15 @@ mod tests {
         s.put(m).await.unwrap();
         let wrong = Secret::generate().unwrap();
         assert!(matches!(
-            s.take(&id, &wrong).await,
+            s.take(&id, &wrong, &|_| true).await,
             TakeOutcome::WrongProof { .. }
         ));
         tokio::time::sleep(Duration::from_millis(1300)).await;
         s.run_pending_tasks().await;
-        assert!(matches!(s.take(&id, &wrong).await, TakeOutcome::Missing));
+        assert!(matches!(
+            s.take(&id, &wrong, &|_| true).await,
+            TakeOutcome::Missing
+        ));
     }
 
     #[tokio::test]
@@ -340,12 +358,36 @@ mod tests {
         s.put(m).await.unwrap();
         tokio::time::sleep(Duration::from_millis(1300)).await;
         s.run_pending_tasks().await;
-        assert!(matches!(s.take(&id, &proof).await, TakeOutcome::Missing));
+        assert!(matches!(
+            s.take(&id, &proof, &|_| true).await,
+            TakeOutcome::Missing
+        ));
         let events = sink.events();
         assert!(
             events.iter().any(|e| e.event_type == "message.expired"
                 && e.message_id.as_deref() == Some(id.as_str()))
         );
+    }
+
+    #[tokio::test]
+    async fn a_refusing_guard_leaves_the_message_untouched() {
+        let s = store(Arc::new(MemorySink::default()));
+        let (m, proof, _) = message(60);
+        let id = m.id.clone();
+        s.put(m).await.unwrap();
+        match s.take(&id, &proof, &|_| false).await {
+            TakeOutcome::Denied { recipient } => assert_eq!(recipient.as_str(), "b@example.com"),
+            other => panic!("expected Denied, got {other:?}"),
+        }
+        let wrong = Secret::generate().unwrap();
+        assert!(matches!(
+            s.take(&id, &wrong, &|_| false).await,
+            TakeOutcome::Denied { .. }
+        ));
+        assert!(matches!(
+            s.take(&id, &proof, &|_| true).await,
+            TakeOutcome::Taken(_)
+        ));
     }
 
     #[tokio::test]
@@ -358,7 +400,10 @@ mod tests {
         assert_eq!(s.revoke(&id, &wrong).await, RevokeOutcome::WrongToken);
         assert_eq!(s.revoke(&id, &revoke).await, RevokeOutcome::Revoked);
         assert_eq!(s.revoke(&id, &revoke).await, RevokeOutcome::Missing);
-        assert!(matches!(s.take(&id, &proof).await, TakeOutcome::Missing));
+        assert!(matches!(
+            s.take(&id, &proof, &|_| true).await,
+            TakeOutcome::Missing
+        ));
     }
 
     #[tokio::test]

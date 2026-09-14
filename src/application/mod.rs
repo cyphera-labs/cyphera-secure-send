@@ -156,7 +156,10 @@ impl MessageService {
         principal: &RequestPrincipal,
         client: &ClientContext,
     ) -> Result<Created, CreateError> {
-        let sender = Email::parse(&request.sender).map_err(CreateError::Sender)?;
+        let sender = match &principal.email {
+            Some(me) => me.clone(),
+            None => Email::parse(&request.sender).map_err(CreateError::Sender)?,
+        };
         let recipient = Email::parse(&request.recipient).map_err(CreateError::Recipient)?;
         let (min, max) = (self.limits.min_ttl_seconds, self.limits.max_ttl_seconds);
         if request.ttl_seconds < min || request.ttl_seconds > max {
@@ -239,27 +242,13 @@ impl MessageService {
             return None;
         };
 
-        match self.store.take(&id, &proof).await {
+        let authorizer = self.authorizer.clone();
+        let guard = move |m: &StoredMessage| {
+            authorizer.authorize_consume(principal, &m.recipient) == Decision::Allow
+        };
+        match self.store.take(&id, &proof, &guard).await {
             TakeOutcome::Taken(message) => {
                 let message = *message;
-                if self
-                    .authorizer
-                    .authorize_consume(principal, &message.recipient)
-                    == Decision::Deny
-                {
-                    // The message is already gone: strict one-time semantics
-                    // mean a denied caller who held a valid proof has burned it.
-                    metrics::counter!("securesend_messages_access_denied_total").increment(1);
-                    bump(&self.counters.access_denied);
-                    let mut event =
-                        AuditEvent::failure(AuditEventType::MessageAccessDenied, Reason::Consume)
-                            .with_message(&id)
-                            .with_client(client);
-                    event.sender = Some(message.sender.to_string());
-                    event.recipient = Some(message.recipient.to_string());
-                    self.audit.emit(event);
-                    return None;
-                }
                 metrics::counter!("securesend_messages_consumed_total").increment(1);
                 bump(&self.counters.consumed);
                 let mut event = AuditEvent::success(AuditEventType::MessageConsumed)
@@ -275,6 +264,17 @@ impl MessageService {
                     created_at: message.created_at,
                     envelope: message.envelope,
                 })
+            }
+            TakeOutcome::Denied { recipient } => {
+                metrics::counter!("securesend_messages_access_denied_total").increment(1);
+                bump(&self.counters.access_denied);
+                let mut event =
+                    AuditEvent::failure(AuditEventType::MessageAccessDenied, Reason::Consume)
+                        .with_message(&id)
+                        .with_client(client);
+                event.recipient = Some(recipient.to_string());
+                self.audit.emit(event);
+                None
             }
             TakeOutcome::Missing => {
                 self.consume_failed(Some(&id), Reason::NotFound, None, client);

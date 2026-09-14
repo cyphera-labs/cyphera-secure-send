@@ -98,6 +98,15 @@ Each of these is enforced by a test.
 14. Only JSON bodies with `Content-Type: application/json` are accepted, and
     there is no CORS policy, so a cross-origin page cannot make the API do
     anything: the preflight fails.
+15. In OIDC mode, authorization is decided inside the same atomic step as the
+    proof check and before it: a caller who is not the named recipient gets
+    the generic answer, the message is untouched, and no proof attempt is
+    counted.
+16. The sender of a message is the signed-in identity whenever there is one;
+    the typed field is ignored.
+17. A login completes only in the browser that started it (state bound to a
+    cookie), only once (state is consumed), and only to a path on this
+    service.
 
 ## Threat model
 
@@ -113,7 +122,10 @@ Each of these is enforced by a test.
 | Probing whether an id exists | yes | identical responses; 2^128 id space |
 | Flooding to exhaust memory | yes | per-client create limit, weight budget, eviction |
 | Spoofed client address | yes | `X-Forwarded-For` honored only from configured proxy networks |
-| Cross-site request forgery | yes | JSON-only API, no CORS |
+| Cross-site request forgery | yes | JSON-only API, no CORS; session cookies are `SameSite=Lax` |
+| Login CSRF and authorization-code injection | yes | state bound to a login cookie, single-use, PKCE, nonce in the ID token |
+| Stolen or forged ID token | yes | signature against the provider's keys, issuer, audience, expiry, and nonce all verified; tokens never reach the browser |
+| Reading someone else's message with a valid link and password | yes, in OIDC mode | recipient binding inside the atomic take |
 | Cross-site scripting | yes | no inline script or style, all text set via DOM APIs |
 | Hosting malware or phishing content | partly | text only, small size limit; enterprise mode will close anonymous creation |
 | Compromised server serving modified JavaScript | **no** | this is the honest limit of browser-side encryption: a malicious server can attack *future* users. Mitigations: signed releases, reproducible interface build, strict CSP, and deploying behind an identity boundary |

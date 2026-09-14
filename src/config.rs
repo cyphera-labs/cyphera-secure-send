@@ -35,6 +35,10 @@ pub struct Settings {
 pub struct ServerSettings {
     /// Address the public listener binds.
     pub bind: SocketAddr,
+    /// The URL users reach the service at, for example
+    /// `https://send.example.com`. Required in OIDC mode, where it forms the
+    /// redirect URL and decides whether cookies are marked Secure.
+    pub public_base_url: Option<String>,
     /// Address the management listener binds (health, readiness, metrics).
     /// Keep it off the public network.
     pub management_bind: SocketAddr,
@@ -130,12 +134,83 @@ pub enum AuditSinkKind {
 #[serde(default, deny_unknown_fields)]
 pub struct AuthSettings {
     pub mode: AuthMode,
+    pub oidc: OidcSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
+    /// Anyone with the link and the password. Sender and recipient are typed.
     Anonymous,
+    /// Users sign in at an OpenID Connect provider. Closed by default: creating
+    /// and reading both require a session, and a message can only be read by
+    /// the recipient it names.
+    Oidc,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OidcSettings {
+    /// The provider's issuer URL, exactly as it appears in its discovery
+    /// document. For Entra ID: `https://login.microsoftonline.com/<tenant-id>/v2.0`.
+    pub issuer: String,
+    pub client_id: String,
+    /// Set through the environment (`CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET`)
+    /// or `client_secret_file`; never printed back.
+    #[serde(skip_serializing)]
+    pub client_secret: Option<String>,
+    pub client_secret_file: Option<PathBuf>,
+    pub scopes: Vec<String>,
+    /// The claim that carries the user's email. Entra ID work accounts
+    /// populate `email` when the `email` scope is requested; `preferred_username`
+    /// is the fallback when the first is absent.
+    pub email_claim: EmailClaim,
+    /// When non-empty, both the signed-in sender and every recipient must
+    /// belong to one of these domains.
+    pub allowed_domains: Vec<String>,
+    /// The signed-in reader's email must equal the message's recipient.
+    pub require_recipient_match: bool,
+    /// Allow creating a message without a session. Off: enterprise mode is closed.
+    pub anonymous_create: bool,
+    /// Allow reading a message without a session. Off: enterprise mode is closed.
+    pub anonymous_consume: bool,
+    pub session_ttl_seconds: u64,
+    /// How long a started login may take before it is forgotten.
+    pub login_ttl_seconds: u64,
+    /// PEM bundle of additional certificate authorities trusted when talking
+    /// to the provider, for private or intercepting CAs.
+    pub trust_ca_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailClaim {
+    Email,
+    PreferredUsername,
+}
+
+impl Default for OidcSettings {
+    fn default() -> Self {
+        Self {
+            issuer: String::new(),
+            client_id: String::new(),
+            client_secret: None,
+            client_secret_file: None,
+            scopes: vec![
+                "openid".to_owned(),
+                "profile".to_owned(),
+                "email".to_owned(),
+            ],
+            email_claim: EmailClaim::Email,
+            allowed_domains: Vec::new(),
+            require_recipient_match: true,
+            anonymous_create: false,
+            anonymous_consume: false,
+            session_ttl_seconds: 8 * 3600,
+            login_ttl_seconds: 600,
+            trust_ca_path: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -168,6 +243,7 @@ impl Default for ServerSettings {
     fn default() -> Self {
         Self {
             bind: "0.0.0.0:8080".parse().expect("static address"),
+            public_base_url: None,
             management_bind: "127.0.0.1:9090".parse().expect("static address"),
             trusted_proxies: Vec::new(),
             hsts: false,
@@ -234,6 +310,7 @@ impl Default for AuthSettings {
     fn default() -> Self {
         Self {
             mode: AuthMode::Anonymous,
+            oidc: OidcSettings::default(),
         }
     }
 }
@@ -364,6 +441,78 @@ impl Settings {
                 "rate_limits must be at least 1 per minute".into(),
             ));
         }
+        if let Some(base) = &self.server.public_base_url {
+            let parsed = url::Url::parse(base).map_err(|_| {
+                ConfigError::Invalid("server.public_base_url must be an absolute URL".into())
+            })?;
+            if parsed.scheme() != "https" && parsed.scheme() != "http" {
+                return Err(ConfigError::Invalid(
+                    "server.public_base_url must be http(s)".into(),
+                ));
+            }
+            if parsed.query().is_some() || parsed.fragment().is_some() {
+                return Err(ConfigError::Invalid(
+                    "server.public_base_url must not carry a query or fragment".into(),
+                ));
+            }
+        }
+        if self.auth.mode == AuthMode::Oidc {
+            let o = &self.auth.oidc;
+            if self.server.public_base_url.is_none() {
+                return Err(ConfigError::Invalid(
+                    "auth.mode oidc requires server.public_base_url".into(),
+                ));
+            }
+            let issuer = url::Url::parse(&o.issuer).map_err(|_| {
+                ConfigError::Invalid("auth.oidc.issuer must be an absolute URL".into())
+            })?;
+            let local = matches!(
+                issuer.host_str(),
+                Some("localhost") | Some("127.0.0.1") | Some("::1")
+            );
+            if issuer.scheme() != "https" && !(issuer.scheme() == "http" && local) {
+                return Err(ConfigError::Invalid(
+                    "auth.oidc.issuer must use https (http is allowed for localhost only)".into(),
+                ));
+            }
+            if o.client_id.trim().is_empty() {
+                return Err(ConfigError::Invalid(
+                    "auth.oidc.client_id is required".into(),
+                ));
+            }
+            if o.client_secret
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+                && o.client_secret_file.is_none()
+            {
+                return Err(ConfigError::Invalid(
+                    "auth.oidc needs client_secret (via CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET) or client_secret_file".into(),
+                ));
+            }
+            if !o.scopes.iter().any(|s| s == "openid") {
+                return Err(ConfigError::Invalid(
+                    "auth.oidc.scopes must include openid".into(),
+                ));
+            }
+            if o.session_ttl_seconds < 60 || o.login_ttl_seconds < 30 {
+                return Err(ConfigError::Invalid(
+                    "auth.oidc session and login lifetimes are too short".into(),
+                ));
+            }
+            for d in &o.allowed_domains {
+                if d.is_empty()
+                    || d.contains('@')
+                    || d.contains(char::is_whitespace)
+                    || d != &d.to_ascii_lowercase()
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "auth.oidc.allowed_domains entry {d:?} must be a lowercase domain"
+                    )));
+                }
+            }
+        }
         let t = &self.server.tls;
         if t.cert_path.is_some() != t.key_path.is_some() {
             return Err(ConfigError::Invalid(
@@ -411,6 +560,45 @@ impl Settings {
     pub fn tls_enabled(&self) -> bool {
         self.server.tls.cert_path.is_some()
     }
+
+    /// The public base URL is served over HTTPS, so cookies carry Secure.
+    pub fn public_https(&self) -> bool {
+        self.server
+            .public_base_url
+            .as_deref()
+            .map(|u| u.starts_with("https://"))
+            .unwrap_or(false)
+    }
+}
+
+impl OidcSettings {
+    /// The client secret from configuration or from the named file, trimmed.
+    pub fn resolve_client_secret(&self) -> Result<String, ConfigError> {
+        if let Some(s) = self
+            .client_secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Ok(s.to_owned());
+        }
+        let path = self.client_secret_file.as_ref().ok_or_else(|| {
+            ConfigError::Invalid("auth.oidc client secret is not configured".into())
+        })?;
+        let raw = std::fs::read_to_string(path).map_err(|e| {
+            ConfigError::Invalid(format!(
+                "auth.oidc.client_secret_file {}: {e}",
+                path.display()
+            ))
+        })?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(ConfigError::Invalid(
+                "auth.oidc.client_secret_file is empty".into(),
+            ));
+        }
+        Ok(trimmed.to_owned())
+    }
 }
 
 /// `#rgb` or `#rrggbb`. Anything else is refused so branding values can be
@@ -450,6 +638,34 @@ mod tests {
         let mut s = Settings::default();
         s.server.tls.cert_path = Some("cert.pem".into());
         assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn oidc_mode_demands_its_inputs() {
+        let mut s = Settings::default();
+        s.auth.mode = AuthMode::Oidc;
+        assert!(s.validate().is_err());
+        s.server.public_base_url = Some("https://send.example.com".into());
+        assert!(s.validate().is_err());
+        s.auth.oidc.issuer = "https://login.microsoftonline.com/tenant/v2.0".into();
+        s.auth.oidc.client_id = "app".into();
+        assert!(s.validate().is_err());
+        s.auth.oidc.client_secret = Some("x".into());
+        s.validate().unwrap();
+        s.auth.oidc.issuer = "http://idp.example.com".into();
+        assert!(s.validate().is_err());
+        s.auth.oidc.issuer = "http://127.0.0.1:9999".into();
+        s.validate().unwrap();
+        s.auth.oidc.allowed_domains = vec!["Acme.com".into()];
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn client_secret_is_never_serialized() {
+        let mut s = Settings::default();
+        s.auth.oidc.client_secret = Some("hunter2".into());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("hunter2"));
     }
 
     #[test]

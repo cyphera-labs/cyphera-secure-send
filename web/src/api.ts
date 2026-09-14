@@ -23,7 +23,14 @@ export interface UiConfig {
   max_plaintext_bytes: number;
   kdf_iterations: number;
   max_failed_proofs: number;
+  auth_mode: "anonymous" | "oidc";
   version: string;
+}
+
+export interface SessionView {
+  authenticated: boolean;
+  email?: string;
+  subject?: string;
 }
 
 export interface CreateRequest {
@@ -86,6 +93,16 @@ export async function loadUiConfig(): Promise<UiConfig> {
   const res = await fetch("/v1/ui-config", { cache: "no-store", credentials: "same-origin" });
   if (!res.ok) throw new ApiError(res.status, "could not load configuration");
   return (await res.json()) as UiConfig;
+}
+
+export async function loadSession(): Promise<SessionView> {
+  const res = await fetch("/v1/session", { cache: "no-store", credentials: "same-origin" });
+  if (!res.ok) return { authenticated: false };
+  return (await res.json()) as SessionView;
+}
+
+export async function logout(): Promise<void> {
+  await fetch("/auth/logout", { method: "POST", credentials: "same-origin", cache: "no-store" });
 }
 
 export const api = {

@@ -54,6 +54,10 @@ body {
 }
 
 .brand-logo { height: 32px; width: auto; max-width: 160px; }
+.top { justify-content: space-between; }
+.who { display: inline-flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+.who-email { color: color-mix(in srgb, var(--md-on-surface) 72%, transparent); }
+input.readonly { background: var(--md-surface-variant); color: color-mix(in srgb, var(--md-on-surface) 72%, transparent); }
 .brand-company { color: var(--md-primary); }
 
 .page {

@@ -81,7 +81,9 @@ fn serve(settings: Settings) -> Result<(), String> {
         .map_err(|e| format!("runtime: {e}"))?;
 
     runtime.block_on(async move {
-        let state = cyphera_secure_send::build_state(settings, None).map_err(|e| e.to_string())?;
+        let state = cyphera_secure_send::build_state(settings, None)
+            .await
+            .map_err(|e| e.to_string())?;
         let ready = Arc::new(AtomicBool::new(false));
 
         let public_addr = state.settings.server.bind;

@@ -15,12 +15,18 @@ pub enum StoreError {
     Unavailable(String),
 }
 
+/// Decides, inside the atomic take, whether the caller may have this message.
+/// Evaluated before the proof, so a denied caller neither burns nor learns.
+pub type TakeGuard<'a> = &'a (dyn Fn(&StoredMessage) -> bool + Send + Sync);
+
 /// Result of an atomic take. Only `Taken` carries the message; every other
 /// variant is reported to the client identically.
 #[derive(Debug)]
 pub enum TakeOutcome {
     /// Proof matched; the message was removed and is returned exactly once.
     Taken(Box<StoredMessage>),
+    /// The guard refused the caller; the message is untouched.
+    Denied { recipient: crate::domain::Email },
     /// No message under that id (never existed, expired, consumed, revoked,
     /// evicted, or burned earlier).
     Missing,
@@ -50,7 +56,7 @@ pub struct StoreStats {
 #[async_trait]
 pub trait MessageStore: Send + Sync {
     async fn put(&self, message: StoredMessage) -> Result<(), StoreError>;
-    async fn take(&self, id: &MessageId, proof: &Proof) -> TakeOutcome;
+    async fn take(&self, id: &MessageId, proof: &Proof, allow: TakeGuard<'_>) -> TakeOutcome;
     async fn revoke(&self, id: &MessageId, token: &RevokeToken) -> RevokeOutcome;
     /// Exact figures; implementations settle pending housekeeping first.
     async fn stats(&self) -> StoreStats;

@@ -53,12 +53,13 @@ pub struct RevokeBody {
     pub revoke_token: String,
 }
 
-fn context(
+async fn context(
     state: &SharedState,
     peer: SocketAddr,
     headers: &HeaderMap,
-) -> (std::net::IpAddr, ClientContext) {
+) -> (std::net::IpAddr, ClientContext, RequestPrincipal) {
     let ip = client_ip::resolve(peer, headers, &state.settings.server.trusted_proxies);
+    let principal = super::auth::principal(state, headers).await;
     let audit = &state.settings.audit;
     let ctx = ClientContext {
         ip: audit.include_client_ip.then(|| ip.to_string()),
@@ -70,10 +71,10 @@ fn context(
         } else {
             None
         },
-        subject: None,
-        issuer: None,
+        subject: principal.subject.clone(),
+        issuer: principal.issuer.clone(),
     };
-    (ip, ctx)
+    (ip, ctx, principal)
 }
 
 fn rate_limited(
@@ -104,7 +105,7 @@ pub async fn create(
     headers: HeaderMap,
     ApiJson(body): ApiJson<CreateBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (ip, ctx) = context(&state, peer, &headers);
+    let (ip, ctx, principal) = context(&state, peer, &headers).await;
     rate_limited(&state, Endpoint::Create, ip, &ctx)?;
 
     let request = CreateRequest {
@@ -116,7 +117,7 @@ pub async fn create(
     };
     let created = state
         .service
-        .create(request, &RequestPrincipal::anonymous(), &ctx)
+        .create(request, &principal, &ctx)
         .await
         .map_err(|e| match e {
             CreateError::Denied => ApiError::Forbidden,
@@ -143,12 +144,12 @@ pub async fn consume(
     headers: HeaderMap,
     ApiJson(body): ApiJson<ConsumeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (ip, ctx) = context(&state, peer, &headers);
+    let (ip, ctx, principal) = context(&state, peer, &headers).await;
     rate_limited(&state, Endpoint::Consume, ip, &ctx)?;
 
     let consumed = state
         .service
-        .consume(&id, &body.proof, &RequestPrincipal::anonymous(), &ctx)
+        .consume(&id, &body.proof, &principal, &ctx)
         .await
         .ok_or(ApiError::Unavailable)?;
 
@@ -167,7 +168,7 @@ pub async fn revoke(
     headers: HeaderMap,
     ApiJson(body): ApiJson<RevokeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (ip, ctx) = context(&state, peer, &headers);
+    let (ip, ctx, _principal) = context(&state, peer, &headers).await;
     rate_limited(&state, Endpoint::Revoke, ip, &ctx)?;
     state.service.revoke(&id, &body.revoke_token, &ctx).await;
     Ok(StatusCode::NO_CONTENT)

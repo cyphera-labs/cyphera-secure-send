@@ -18,7 +18,8 @@ use api::ratelimit::Limiters;
 use api::{AppState, SharedState};
 use application::{MessageLimits, MessageService};
 use audit::{AuditSink, DiscardSink, StdoutJsonSink};
-use auth::{AnonymousAuthorizer, ConsumeAuthorizer};
+use auth::oidc::{OidcError, OidcProvider};
+use auth::{AnonymousAuthorizer, ConsumeAuthorizer, OidcAuthorizer};
 use config::{AuditSinkKind, AuthMode, Settings, StorageBackend};
 use domain::EnvelopeLimits;
 use storage::MessageStore;
@@ -28,11 +29,13 @@ use storage::memory::MemoryStore;
 pub enum BuildError {
     #[error(transparent)]
     Asset(#[from] AssetError),
+    #[error(transparent)]
+    Oidc(#[from] OidcError),
 }
 
 /// Everything the listeners need, wired from settings. `audit_override`
 /// lets tests capture events.
-pub fn build_state(
+pub async fn build_state(
     settings: Settings,
     audit_override: Option<Arc<dyn AuditSink>>,
 ) -> Result<SharedState, BuildError> {
@@ -52,9 +55,26 @@ pub fn build_state(
         )),
     };
 
-    let authorizer: Arc<dyn ConsumeAuthorizer> = match settings.auth.mode {
-        AuthMode::Anonymous => Arc::new(AnonymousAuthorizer),
-    };
+    let (authorizer, oidc): (Arc<dyn ConsumeAuthorizer>, Option<Arc<OidcProvider>>) =
+        match settings.auth.mode {
+            AuthMode::Anonymous => (Arc::new(AnonymousAuthorizer), None),
+            AuthMode::Oidc => {
+                let o = &settings.auth.oidc;
+                let base = settings
+                    .server
+                    .public_base_url
+                    .as_deref()
+                    .unwrap_or_default();
+                let provider = OidcProvider::discover(o, base, settings.public_https()).await?;
+                let authorizer = OidcAuthorizer {
+                    allowed_domains: o.allowed_domains.clone(),
+                    require_recipient_match: o.require_recipient_match,
+                    anonymous_create: o.anonymous_create,
+                    anonymous_consume: o.anonymous_consume,
+                };
+                (Arc::new(authorizer), Some(Arc::new(provider)))
+            }
+        };
 
     let limits = MessageLimits {
         min_ttl_seconds: settings.messages.min_ttl_seconds,
@@ -76,5 +96,6 @@ pub fn build_state(
         audit,
         limiters,
         branding,
+        oidc,
     }))
 }

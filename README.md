@@ -54,6 +54,9 @@ to.
   message and one "unavailable".
 - **Nothing leaks by shape.** Every failure looks the same. No secret ever
   appears in a URL path, a log line, or an audit event.
+- **Your identity provider in front of it.** Enterprise mode signs everyone
+  in through OpenID Connect, Entra ID or any other, makes the sender the
+  signed-in user, and lets only the named recipient read. Closed by default.
 - **Yours in ten minutes.** Name, logo, colors, footer, support link: a few
   lines of configuration, no rebuild.
 - **Enterprise posture from day one.** Structured audit events, Prometheus
@@ -105,9 +108,20 @@ link = /m/<id>#<link secret…>
 The part after `#` never leaves the browser. Full protocol, invariants, and
 threat model: [docs/security-model.md](docs/security-model.md).
 
+## Two modes
+
+**Standalone**: anyone with the link and the password. Sender and recipient
+are typed. Good for a team or a lab.
+
+**Enterprise**: `auth.mode: oidc`. Users sign in at your provider; creating
+requires a session, the sender is the signed-in identity, reading requires
+signing in as the named recipient, and senders and recipients can be limited
+to your domains. Setup for Entra ID and others: [docs/identity.md](docs/identity.md).
+
 ## Documentation
 
 - [Security model](docs/security-model.md)
+- [Identity and enterprise mode](docs/identity.md)
 - [Configuration](docs/configuration.md)
 - [Branding](docs/branding.md)
 - [Deployment](docs/deployment.md): container, Kubernetes, metrics, audit, air-gap, verifying releases
@@ -119,7 +133,9 @@ threat model: [docs/security-model.md](docs/security-model.md).
 | `POST /v1/messages` | create; returns `id`, `revoke_token`, `expires_at` once |
 | `POST /v1/messages/{id}/consume` | body `{proof}`; returns the envelope exactly once, or `404 {"error":"unavailable"}` |
 | `POST /v1/messages/{id}/revoke` | body `{revoke_token}`; always `204` |
-| `GET /v1/ui-config` | branding and limits for the interface |
+| `GET /v1/ui-config` | branding, limits, and the auth mode for the interface |
+| `GET /v1/session` | who is signed in, if anyone |
+| `GET /auth/login`, `GET /auth/callback`, `POST /auth/logout` | OIDC mode only |
 | `GET /v1/health` | `{"status":"ok"}` |
 | `GET /livez`, `/readyz` | management listener: liveness and readiness |
 | `GET /v1/health`, `/v1/stats` | management listener: JSON health with store occupancy; lifecycle totals, occupancy, and limits |

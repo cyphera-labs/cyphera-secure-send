@@ -17,6 +17,10 @@ Initial implementation.
   support link.
 - Container image on a minimal nonroot base; release workflow with signed
   artifacts, SBOMs, and provenance.
+- Enterprise mode: OpenID Connect sign-in with PKCE, state, and nonce;
+  server-side sessions; the sender is the signed-in identity; recipient
+  binding enforced inside the atomic take; allowed domains; closed by default.
+  Entra ID documented first, any standards-compliant provider works.
 - Security workflow: actionlint, Trufflehog, Gitleaks, cargo-deny, npm audit,
   Semgrep, dependency review; CodeQL for both languages; OpenSSF Scorecard;
   SonarQube with coverage from cargo-llvm-cov and Vitest; every action pinned

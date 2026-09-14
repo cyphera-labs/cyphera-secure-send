@@ -22,14 +22,16 @@ struct Harness {
     audit: Arc<MemorySink>,
 }
 
-fn harness(tweak: impl FnOnce(&mut Settings)) -> Harness {
+async fn harness(tweak: impl FnOnce(&mut Settings)) -> Harness {
     let mut settings = Settings::default();
     settings.messages.kdf.min_iterations = 1;
     settings.audit.include_client_ip = true;
     tweak(&mut settings);
     settings.validate().unwrap();
     let audit = Arc::new(MemorySink::default());
-    let state = cyphera_secure_send::build_state(settings, Some(audit.clone())).unwrap();
+    let state = cyphera_secure_send::build_state(settings, Some(audit.clone()))
+        .await
+        .unwrap();
     Harness {
         app: public_router(state),
         audit,
@@ -113,7 +115,7 @@ async fn create(app: &Router, verifier: &str) -> (String, String) {
 
 #[tokio::test]
 async fn lifecycle_create_consume_once() {
-    let h = harness(|_| {});
+    let h = harness(|_| {}).await;
     let (proof, verifier) = proof_and_verifier();
     let (id, _) = create(&h.app, &verifier).await;
     assert_eq!(id.len(), 26);
@@ -149,7 +151,7 @@ async fn lifecycle_create_consume_once() {
 
 #[tokio::test]
 async fn every_consume_failure_is_identical() {
-    let h = harness(|s| s.messages.max_failed_proofs = 2);
+    let h = harness(|s| s.messages.max_failed_proofs = 2).await;
     let (proof, verifier) = proof_and_verifier();
     let (id, _) = create(&h.app, &verifier).await;
     let wrong = BASE64URL_NOPAD.encode(&[9u8; 32]);
@@ -253,7 +255,7 @@ async fn every_consume_failure_is_identical() {
 
 #[tokio::test]
 async fn revoke_always_returns_no_content() {
-    let h = harness(|_| {});
+    let h = harness(|_| {}).await;
     let (_, verifier) = proof_and_verifier();
     let (id, revoke) = create(&h.app, &verifier).await;
     let wrong = BASE64URL_NOPAD.encode(&[1u8; 32]);
@@ -292,7 +294,7 @@ async fn revoke_always_returns_no_content() {
 
 #[tokio::test]
 async fn security_headers_on_every_route() {
-    let h = harness(|s| s.server.hsts = true);
+    let h = harness(|s| s.server.hsts = true).await;
     for (method, path, body) in [
         ("GET", "/", None),
         ("GET", "/m/abcdefghijklmnopqrstuvwxyz", None),
@@ -342,7 +344,7 @@ async fn security_headers_on_every_route() {
 
 #[tokio::test]
 async fn create_validates_and_reports_request_problems_only() {
-    let h = harness(|_| {});
+    let h = harness(|_| {}).await;
     let (_, verifier) = proof_and_verifier();
 
     let mut b = create_body(&verifier, 48);
@@ -380,7 +382,7 @@ async fn create_validates_and_reports_request_problems_only() {
 
 #[tokio::test]
 async fn oversized_bodies_are_refused_before_parsing() {
-    let h = harness(|s| s.messages.max_plaintext_bytes = 1024);
+    let h = harness(|s| s.messages.max_plaintext_bytes = 1024).await;
     let (_, verifier) = proof_and_verifier();
     let (status, _, _) = send(
         &h.app,
@@ -413,7 +415,7 @@ async fn oversized_bodies_are_refused_before_parsing() {
 
 #[tokio::test]
 async fn wrong_content_type_is_rejected() {
-    let h = harness(|_| {});
+    let h = harness(|_| {}).await;
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/messages/abcdefghijklmnopqrstuvwxyz/consume")
@@ -427,7 +429,7 @@ async fn wrong_content_type_is_rejected() {
 
 #[tokio::test]
 async fn rate_limits_are_per_client_and_audited() {
-    let h = harness(|s| s.rate_limits.consume_per_minute = 3);
+    let h = harness(|s| s.rate_limits.consume_per_minute = 3).await;
     let (proof, _) = proof_and_verifier();
     let path = "/v1/messages/abcdefghijklmnopqrstuvwxyz/consume";
     for _ in 0..3 {
@@ -473,7 +475,8 @@ async fn trusted_proxy_header_is_honored_only_from_trusted_peers() {
     let h = harness(|s| {
         s.server.trusted_proxies = vec!["10.0.0.0/8".parse().unwrap()];
         s.rate_limits.consume_per_minute = 1;
-    });
+    })
+    .await;
     let path = "/v1/messages/abcdefghijklmnopqrstuvwxyz/consume";
     let mut req = Request::builder()
         .method("POST")
@@ -497,7 +500,8 @@ async fn audit_stream_never_carries_secrets() {
     let h = harness(|s| {
         s.messages.max_failed_proofs = 1;
         s.audit.include_user_agent = true;
-    });
+    })
+    .await;
     let (proof, verifier) = proof_and_verifier();
     let (id, revoke) = create(&h.app, &verifier).await;
     let wrong = BASE64URL_NOPAD.encode(&[9u8; 32]);
@@ -547,7 +551,7 @@ async fn audit_stream_never_carries_secrets() {
 
 #[tokio::test]
 async fn ui_config_exposes_only_non_secret_settings() {
-    let h = harness(|s| s.branding.company_name = "Acme".into());
+    let h = harness(|s| s.branding.company_name = "Acme".into()).await;
     let (status, _, body) = send(&h.app, "GET", "/v1/ui-config", None, "192.0.2.12").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["company_name"], "Acme");
@@ -558,7 +562,7 @@ async fn ui_config_exposes_only_non_secret_settings() {
 
 #[tokio::test]
 async fn shell_is_served_for_page_routes_and_assets_are_reachable() {
-    let h = harness(|_| {});
+    let h = harness(|_| {}).await;
     for path in [
         "/",
         "/m/abcdefghijklmnopqrstuvwxyz",

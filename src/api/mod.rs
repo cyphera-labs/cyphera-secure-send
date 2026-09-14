@@ -1,6 +1,7 @@
 //! HTTP surface. Public listener: the interface, the message API, branding.
 //! Management listener: liveness, readiness, metrics.
 
+pub mod auth;
 pub mod branding;
 pub mod client_ip;
 pub mod error;
@@ -17,6 +18,7 @@ use std::sync::Arc;
 
 use crate::application::MessageService;
 use crate::audit::AuditSink;
+use crate::auth::oidc::OidcProvider;
 use crate::config::Settings;
 
 pub struct AppState {
@@ -25,6 +27,8 @@ pub struct AppState {
     pub audit: Arc<dyn AuditSink>,
     pub limiters: ratelimit::Limiters,
     pub branding: branding::BrandingAssets,
+    /// Present in OIDC mode only.
+    pub oidc: Option<Arc<OidcProvider>>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -38,11 +42,15 @@ pub fn public_router(state: SharedState) -> Router {
         .route("/v1/messages/{id}/consume", post(messages::consume))
         .route("/v1/messages/{id}/revoke", post(messages::revoke))
         .route("/v1/ui-config", get(branding::ui_config))
+        .route("/v1/session", get(auth::session))
         .route("/v1/health", get(management::health))
         .layer(DefaultBodyLimit::max(body_limit));
 
     Router::new()
         .merge(api)
+        .route("/auth/login", get(auth::login))
+        .route("/auth/callback", get(auth::callback))
+        .route("/auth/logout", post(auth::logout))
         .route("/brand/logo", get(branding::logo))
         .route("/brand/favicon", get(branding::favicon))
         .merge(static_files::router())

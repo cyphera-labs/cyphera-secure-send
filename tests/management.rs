@@ -25,13 +25,14 @@ struct Harness {
     ready: Arc<AtomicBool>,
 }
 
-fn harness() -> Harness {
+async fn harness() -> Harness {
     let mut settings = Settings::default();
     settings.messages.kdf.min_iterations = 1;
     settings.messages.max_failed_proofs = 2;
     settings.validate().unwrap();
-    let state =
-        cyphera_secure_send::build_state(settings, Some(Arc::new(MemorySink::default()))).unwrap();
+    let state = cyphera_secure_send::build_state(settings, Some(Arc::new(MemorySink::default())))
+        .await
+        .unwrap();
     let ready = Arc::new(AtomicBool::new(true));
     static RECORDER: OnceLock<metrics_exporter_prometheus::PrometheusHandle> = OnceLock::new();
     let prometheus = RECORDER
@@ -94,7 +95,7 @@ fn create_body(verifier: &str) -> Value {
 
 #[tokio::test]
 async fn stats_reflect_the_lifecycle() {
-    let h = harness();
+    let h = harness().await;
     let (status, stats) = get(&h.mgmt, "/v1/stats").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stats["storage"]["active_messages"], 0);
@@ -130,7 +131,7 @@ async fn stats_reflect_the_lifecycle() {
 
 #[tokio::test]
 async fn stats_count_burns_consumes_and_rate_limits() {
-    let h = harness();
+    let h = harness().await;
     let proof = [7u8; 32];
     let verifier = BASE64URL_NOPAD.encode(&Sha256::digest(proof));
     let proof_b64 = BASE64URL_NOPAD.encode(&proof);
@@ -193,7 +194,7 @@ async fn stats_count_burns_consumes_and_rate_limits() {
 
 #[tokio::test]
 async fn readiness_and_detailed_health_track_shutdown() {
-    let h = harness();
+    let h = harness().await;
     let (st, _) = get(&h.mgmt, "/readyz").await;
     assert_eq!(st, StatusCode::OK);
     let (st, _) = get(&h.mgmt, "/livez").await;
@@ -210,7 +211,7 @@ async fn readiness_and_detailed_health_track_shutdown() {
 
 #[tokio::test]
 async fn metrics_render_in_prometheus_format() {
-    let h = harness();
+    let h = harness().await;
     let (st, body) = get(&h.mgmt, "/metrics").await;
     assert_eq!(st, StatusCode::OK);
     let text = body.as_str().unwrap();
@@ -220,7 +221,7 @@ async fn metrics_render_in_prometheus_format() {
 
 #[tokio::test]
 async fn public_health_stays_minimal() {
-    let h = harness();
+    let h = harness().await;
     let (st, body) = get(&h.public, "/v1/health").await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body, json!({"status": "ok"}));

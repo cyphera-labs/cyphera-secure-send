@@ -5,6 +5,7 @@
 
 server:
   bind: 0.0.0.0:8080
+  public_base_url: null             # e.g. https://send.example.com; required for auth.mode oidc
   management_bind: 127.0.0.1:9090   # liveness, readiness, metrics; keep private
   trusted_proxies: []               # CIDRs whose X-Forwarded-For is honored
   hsts: false                       # enable when served over HTTPS
@@ -40,7 +41,21 @@ audit:
   include_user_agent: false
 
 auth:
-  mode: anonymous
+  mode: anonymous                   # or oidc: sign-in required, recipient binding on
+  oidc:
+    issuer: ""                      # Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0
+    client_id: ""
+    # client_secret: set CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET, or:
+    client_secret_file: null
+    scopes: [openid, profile, email]
+    email_claim: email              # or preferred_username
+    allowed_domains: []             # e.g. [example.com]
+    require_recipient_match: true
+    anonymous_create: false
+    anonymous_consume: false
+    session_ttl_seconds: 28800
+    login_ttl_seconds: 600
+    trust_ca_path: null
 
 branding:
   product_name: Cyphera SecureSend

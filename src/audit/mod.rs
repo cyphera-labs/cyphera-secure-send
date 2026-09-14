@@ -22,6 +22,9 @@ pub enum AuditEventType {
     MessageEvicted,
     MessageAccessDenied,
     RateLimited,
+    AuthLogin,
+    AuthLoginFailed,
+    AuthLogout,
     ServerStarted,
     ServerStopping,
 }
@@ -38,6 +41,9 @@ impl AuditEventType {
             Self::MessageEvicted => "message.evicted",
             Self::MessageAccessDenied => "message.access_denied",
             Self::RateLimited => "rate_limited",
+            Self::AuthLogin => "auth.login",
+            Self::AuthLoginFailed => "auth.login_failed",
+            Self::AuthLogout => "auth.logout",
             Self::ServerStarted => "server.started",
             Self::ServerStopping => "server.stopping",
         }
@@ -63,6 +69,9 @@ pub enum Reason {
     Create,
     Consume,
     Revoke,
+    ProviderError,
+    StateMismatch,
+    TokenRejected,
 }
 
 #[derive(Clone, Debug, Serialize)]

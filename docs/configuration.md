@@ -23,6 +23,7 @@ A complete annotated file is at `config/cyphera-secure-send.example.yaml`.
 | Key | Default | Notes |
 |---|---|---|
 | `bind` | `0.0.0.0:8080` | public listener |
+| `public_base_url` | unset | the URL users reach the service at; required in OIDC mode |
 | `management_bind` | `127.0.0.1:9090` | `/livez`, `/readyz`, `/metrics`. Keep it off the public network |
 | `trusted_proxies` | `[]` | CIDRs. `X-Forwarded-For` is honored only when the peer is inside one |
 | `hsts` | `false` | emit `Strict-Transport-Security`; enable once HTTPS is in place |
@@ -63,8 +64,25 @@ and vanish on restart.
 
 ## auth
 
-`mode: anonymous` is the only mode today: anyone with the link and the
-password.
+`mode: anonymous` (default) is anyone with the link and the password.
+`mode: oidc` puts your identity provider in front of both ends; see
+[identity.md](identity.md).
+
+| Key | Default | Notes |
+|---|---|---|
+| `oidc.issuer` | | the provider's issuer URL, as in its discovery document |
+| `oidc.client_id` | | |
+| `oidc.client_secret` | | set as `CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET`; never printed back |
+| `oidc.client_secret_file` | | alternative: a file containing the secret |
+| `oidc.scopes` | `[openid, profile, email]` | |
+| `oidc.email_claim` | `email` | or `preferred_username`; the other is the fallback |
+| `oidc.allowed_domains` | `[]` | when set, both sender and recipient must belong to one |
+| `oidc.require_recipient_match` | `true` | the reader must be the named recipient |
+| `oidc.anonymous_create` | `false` | |
+| `oidc.anonymous_consume` | `false` | |
+| `oidc.session_ttl_seconds` | `28800` | |
+| `oidc.login_ttl_seconds` | `600` | how long a started login stays valid |
+| `oidc.trust_ca_path` | unset | PEM bundle of extra CAs for reaching the provider |
 
 ## branding
 
