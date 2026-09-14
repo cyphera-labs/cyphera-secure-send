@@ -37,8 +37,9 @@ Not a password manager. Not a vault. It handles the handoff.
 - **Yours in ten minutes.** Name, logo, colors, footer, support link: a few
   lines of configuration, no rebuild.
 - **Enterprise posture from day one.** Structured audit events, Prometheus
-  metrics, liveness and readiness, graceful shutdown, strict CSP, no
-  third-party origins, nonroot container, signed releases with SBOMs.
+  metrics, JSON health and stats, liveness and readiness, graceful shutdown,
+  strict CSP, no third-party origins, nonroot container, signed releases with
+  SBOMs.
 
 ## Run it
 
@@ -100,7 +101,9 @@ threat model: [docs/security-model.md](docs/security-model.md).
 | `POST /v1/messages/{id}/revoke` | body `{revoke_token}`; always `204` |
 | `GET /v1/ui-config` | branding and limits for the interface |
 | `GET /v1/health` | `{"status":"ok"}` |
-| `GET /livez`, `/readyz`, `/metrics` | management listener |
+| `GET /livez`, `/readyz` | management listener: liveness and readiness |
+| `GET /v1/health`, `/v1/stats` | management listener: JSON health with store occupancy; lifecycle totals, occupancy, and limits |
+| `GET /metrics` | management listener: Prometheus |
 
 ## Supply chain and quality
 

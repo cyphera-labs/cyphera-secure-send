@@ -2,6 +2,7 @@
 //! touches the store, the authorizer, and the audit sink together.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -71,11 +72,54 @@ pub struct Consumed {
     pub envelope: Envelope,
 }
 
+/// Lifecycle totals since the process started. Mirrors the Prometheus
+/// counters in a form a JSON endpoint can hand back.
+#[derive(Debug, Default)]
+pub struct Counters {
+    pub created: AtomicU64,
+    pub consumed: AtomicU64,
+    pub consume_failed: AtomicU64,
+    pub burned: AtomicU64,
+    pub revoked: AtomicU64,
+    pub access_denied: AtomicU64,
+    pub rate_limited: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub struct CounterSnapshot {
+    pub created: u64,
+    pub consumed: u64,
+    pub consume_failed: u64,
+    pub burned: u64,
+    pub revoked: u64,
+    pub access_denied: u64,
+    pub rate_limited: u64,
+}
+
+impl Counters {
+    pub fn snapshot(&self) -> CounterSnapshot {
+        CounterSnapshot {
+            created: self.created.load(Ordering::Relaxed),
+            consumed: self.consumed.load(Ordering::Relaxed),
+            consume_failed: self.consume_failed.load(Ordering::Relaxed),
+            burned: self.burned.load(Ordering::Relaxed),
+            revoked: self.revoked.load(Ordering::Relaxed),
+            access_denied: self.access_denied.load(Ordering::Relaxed),
+            rate_limited: self.rate_limited.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn bump(counter: &AtomicU64) {
+    counter.fetch_add(1, Ordering::Relaxed);
+}
+
 pub struct MessageService {
     store: Arc<dyn MessageStore>,
     authorizer: Arc<dyn ConsumeAuthorizer>,
     audit: Arc<dyn AuditSink>,
     limits: MessageLimits,
+    counters: Counters,
 }
 
 impl MessageService {
@@ -90,11 +134,16 @@ impl MessageService {
             authorizer,
             audit,
             limits,
+            counters: Counters::default(),
         }
     }
 
     pub fn limits(&self) -> &MessageLimits {
         &self.limits
+    }
+
+    pub fn counters(&self) -> &Counters {
+        &self.counters
     }
 
     pub fn store(&self) -> &Arc<dyn MessageStore> {
@@ -128,6 +177,7 @@ impl MessageService {
             event.sender = Some(sender.to_string());
             event.recipient = Some(recipient.to_string());
             self.audit.emit(event);
+            bump(&self.counters.access_denied);
             return Err(CreateError::Denied);
         }
 
@@ -155,6 +205,7 @@ impl MessageService {
         }
 
         metrics::counter!("securesend_messages_created_total").increment(1);
+        bump(&self.counters.created);
         let mut event = AuditEvent::success(AuditEventType::MessageCreated)
             .with_message(&id)
             .with_client(client);
@@ -199,6 +250,7 @@ impl MessageService {
                     // The message is already gone: strict one-time semantics
                     // mean a denied caller who held a valid proof has burned it.
                     metrics::counter!("securesend_messages_access_denied_total").increment(1);
+                    bump(&self.counters.access_denied);
                     let mut event =
                         AuditEvent::failure(AuditEventType::MessageAccessDenied, Reason::Consume)
                             .with_message(&id)
@@ -209,6 +261,7 @@ impl MessageService {
                     return None;
                 }
                 metrics::counter!("securesend_messages_consumed_total").increment(1);
+                bump(&self.counters.consumed);
                 let mut event = AuditEvent::success(AuditEventType::MessageConsumed)
                     .with_message(&id)
                     .with_client(client);
@@ -233,6 +286,7 @@ impl MessageService {
             }
             TakeOutcome::Burned { failed_proofs } => {
                 metrics::counter!("securesend_messages_burned_total").increment(1);
+                bump(&self.counters.burned);
                 let mut event = AuditEvent::failure(AuditEventType::MessageBurned, Reason::Burned)
                     .with_message(&id)
                     .with_client(client);
@@ -251,6 +305,7 @@ impl MessageService {
         client: &ClientContext,
     ) {
         metrics::counter!("securesend_messages_consume_failed_total").increment(1);
+        bump(&self.counters.consume_failed);
         let mut event =
             AuditEvent::failure(AuditEventType::MessageConsumeFailed, reason).with_client(client);
         if let Some(id) = id {
@@ -280,6 +335,7 @@ impl MessageService {
         let event = match self.store.revoke(&id, &token).await {
             RevokeOutcome::Revoked => {
                 metrics::counter!("securesend_messages_revoked_total").increment(1);
+                bump(&self.counters.revoked);
                 AuditEvent::success(AuditEventType::MessageRevoked)
             }
             RevokeOutcome::Missing => {

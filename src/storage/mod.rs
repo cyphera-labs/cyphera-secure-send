@@ -42,6 +42,9 @@ pub enum RevokeOutcome {
 pub struct StoreStats {
     pub active_messages: u64,
     pub weighted_bytes: u64,
+    pub budget_bytes: u64,
+    pub expired_total: u64,
+    pub evicted_total: u64,
 }
 
 #[async_trait]
@@ -49,5 +52,6 @@ pub trait MessageStore: Send + Sync {
     async fn put(&self, message: StoredMessage) -> Result<(), StoreError>;
     async fn take(&self, id: &MessageId, proof: &Proof) -> TakeOutcome;
     async fn revoke(&self, id: &MessageId, token: &RevokeToken) -> RevokeOutcome;
-    fn stats(&self) -> StoreStats;
+    /// Exact figures; implementations settle pending housekeeping first.
+    async fn stats(&self) -> StoreStats;
 }

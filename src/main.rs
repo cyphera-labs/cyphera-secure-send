@@ -89,11 +89,11 @@ fn serve(settings: Settings) -> Result<(), String> {
         let shutdown_timeout = Duration::from_secs(state.settings.server.shutdown_timeout_seconds);
         let tls = state.settings.server.tls.clone();
 
-        let mgmt_state = Arc::new(ManagementState {
-            app: state.clone(),
-            ready: ready.clone(),
+        let mgmt_state = Arc::new(ManagementState::new(
+            state.clone(),
+            ready.clone(),
             prometheus,
-        });
+        ));
         let mgmt_router = management::router(mgmt_state);
         let mgmt_listener = tokio::net::TcpListener::bind(management_addr)
             .await
@@ -151,7 +151,7 @@ fn serve(settings: Settings) -> Result<(), String> {
 
         shutdown_signal().await;
         ready.store(false, Ordering::SeqCst);
-        let stats = state.service.store().stats();
+        let stats = state.service.store().stats().await;
         let mut event = AuditEvent::success(AuditEventType::ServerStopping);
         event.active_messages = Some(stats.active_messages);
         state.audit.emit(event);

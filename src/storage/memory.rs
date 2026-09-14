@@ -7,6 +7,7 @@ use moka::future::Cache;
 use moka::notification::RemovalCause;
 use moka::ops::compute::{CompResult, Op};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 
@@ -17,6 +18,9 @@ use crate::domain::{MessageId, Proof, RevokeToken, StoredMessage, Verifier};
 pub struct MemoryStore {
     cache: Cache<MessageId, StoredMessage>,
     max_failed_proofs: u32,
+    budget_bytes: u64,
+    expired: Arc<AtomicU64>,
+    evicted: Arc<AtomicU64>,
 }
 
 struct ExpireAtField;
@@ -57,6 +61,9 @@ impl MemoryStore {
         max_failed_proofs: u32,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
+        let expired = Arc::new(AtomicU64::new(0));
+        let evicted = Arc::new(AtomicU64::new(0));
+        let (expired_l, evicted_l) = (expired.clone(), evicted.clone());
         let listener = move |_key: Arc<MessageId>, value: StoredMessage, cause: RemovalCause| {
             let event_type = match cause {
                 RemovalCause::Expired => AuditEventType::MessageExpired,
@@ -65,9 +72,13 @@ impl MemoryStore {
             };
             match event_type {
                 AuditEventType::MessageExpired => {
+                    expired_l.fetch_add(1, Ordering::Relaxed);
                     metrics::counter!("securesend_messages_expired_total").increment(1)
                 }
-                _ => metrics::counter!("securesend_messages_evicted_total").increment(1),
+                _ => {
+                    evicted_l.fetch_add(1, Ordering::Relaxed);
+                    metrics::counter!("securesend_messages_evicted_total").increment(1)
+                }
             }
             let mut event = AuditEvent::success(event_type).with_message(&value.id);
             event.sender = Some(value.sender.to_string());
@@ -85,6 +96,9 @@ impl MemoryStore {
         Self {
             cache,
             max_failed_proofs,
+            budget_bytes: memory_budget_bytes,
+            expired,
+            evicted,
         }
     }
 
@@ -187,10 +201,14 @@ impl MessageStore for MemoryStore {
         }
     }
 
-    fn stats(&self) -> StoreStats {
+    async fn stats(&self) -> StoreStats {
+        self.cache.run_pending_tasks().await;
         StoreStats {
             active_messages: self.cache.entry_count(),
             weighted_bytes: self.cache.weighted_size(),
+            budget_bytes: self.budget_bytes,
+            expired_total: self.expired.load(Ordering::Relaxed),
+            evicted_total: self.evicted.load(Ordering::Relaxed),
         }
     }
 }
@@ -271,7 +289,7 @@ mod tests {
             h.await.unwrap();
         }
         assert_eq!(wins.load(Ordering::SeqCst), 1);
-        assert_eq!(s.stats().active_messages, 0);
+        assert_eq!(s.stats().await.active_messages, 0);
     }
 
     #[tokio::test]
@@ -356,7 +374,7 @@ mod tests {
             s.put(m).await.unwrap();
         }
         s.run_pending_tasks().await;
-        assert!(s.stats().weighted_bytes <= 2000);
+        assert!(s.stats().await.weighted_bytes <= 2000);
         assert!(
             sink.events()
                 .iter()

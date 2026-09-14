@@ -43,6 +43,23 @@ Run it like any stateless service. What matters:
   `server.tls.key_path` to terminate in-process. Enable `server.hsts` once
   HTTPS is in place.
 
+## Health and stats
+
+All on the management port. None of these are reachable from the public listener,
+because they reveal how much traffic the service carries.
+
+| Endpoint | What it is for |
+|---|---|
+| `GET /livez` | process is alive; always `200` |
+| `GET /readyz` | `200` while serving, `503` once shutdown has begun; wire this to the orchestrator |
+| `GET /v1/health` | JSON: status, readiness, version, uptime, and store occupancy (active messages, used and budget bytes, percent) |
+| `GET /v1/stats` | JSON: the same store view plus lifecycle totals since start (created, consumed, consume_failed, burned, revoked, expired, evicted, access_denied, rate_limited) and the effective limits |
+| `GET /metrics` | Prometheus text format |
+
+`/v1/stats` is what a dashboard or a runbook check should read. Totals reset when the process restarts, like everything else here.
+
+The public listener's `GET /v1/health` answers only `{"status":"ok"}`.
+
 ## Metrics
 
 `GET /metrics` on the management port, Prometheus text format.
@@ -60,6 +77,7 @@ Run it like any stateless service. What matters:
 | `securesend_rate_limited_total{endpoint}` | counter |
 | `securesend_messages_active` | gauge |
 | `securesend_store_bytes` | gauge |
+| `securesend_store_budget_bytes` | gauge |
 
 ## Audit events
 
