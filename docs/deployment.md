@@ -2,6 +2,14 @@
 
 A vanilla deployment needs a process and memory. Nothing else.
 
+**What kind of thing you are running.** SecureSend is diskless and ephemeral,
+but it is not stateless: every pending message lives in the RAM of one
+process. That is the design, and it has one consequence you must plan for:
+anything that stops or replaces that process, a deploy, a restart, a platform
+maintenance event, discards every message that has not been read yet. Senders
+create a new link; nothing is recoverable. This document calls that shape a
+**standalone deployment**, and everything below describes it.
+
 ## Binary
 
 ```
@@ -24,7 +32,8 @@ mounted from `./config`.
 
 ## Kubernetes
 
-Run it like any stateless service. What matters:
+Run it as a single-replica Deployment with a `Recreate` strategy, or as a
+StatefulSet with one replica. What matters:
 
 - **Probes.** `GET /livez` and `GET /readyz` on the management port (9090 in
   the image). Readiness turns to 503 the moment shutdown starts.
@@ -36,9 +45,11 @@ Run it like any stateless service. What matters:
   needs roughly that plus 64 MiB. Set the container limit accordingly.
 - **Replicas.** One. The memory backend is per-process; a second replica has
   its own, separate set of messages, and a load balancer would send the
-  recipient to the wrong one. One process covers a large organization: the
-  default budget holds thousands of maximum-size messages, and a restart takes
-  well under a second.
+  recipient to the wrong one. Set minimum and maximum replicas both to 1 and
+  use a `Recreate` strategy, because a rolling update runs two copies for a
+  moment and the old one takes its messages with it. One process covers a
+  large organization: the default budget holds thousands of maximum-size
+  messages, and a restart takes well under a second.
 - **Proxy.** Set `server.trusted_proxies` to your ingress's address range so
   rate limiting and audit see the real client address.
 - **TLS.** Terminate at the ingress, or set `server.tls.cert_path` and
@@ -61,6 +72,21 @@ because they reveal how much traffic the service carries.
 `/v1/stats` is what a dashboard or a runbook check should read. Totals reset when the process restarts, like everything else here.
 
 The public listener's `GET /v1/health` answers only `{"status":"ok"}`.
+
+## Managed container platforms
+
+The same single-process rule applies, and each platform has a default that
+works against it:
+
+| Platform | Default to change | Why |
+|---|---|---|
+| Azure Container Apps | min replicas 0, max 10 | scale-to-zero discards messages; scale-out splits them; the platform may briefly run extra replicas during maintenance |
+| Google Cloud Run | scales to zero; max instances is a soft limit | same: pin min and max instances to 1, and accept that a revision rollout replaces the instance |
+| AWS ECS on Fargate | service deployments start the replacement before stopping the old task | set minimum healthy percent to 0 and maximum to 100 so only one task ever runs, and expect task replacement on platform maintenance |
+
+On all three, pending messages are lost on every deploy and every platform
+replacement. That is acceptable for the handoff use case, where a message
+lives minutes to hours, but say so in your runbook.
 
 ## Metrics
 

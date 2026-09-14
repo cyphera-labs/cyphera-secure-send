@@ -10,16 +10,36 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](Cargo.toml)
 
-One-time secret handoff for controlled environments.
+**Stop sending passwords in Teams.**
 
-Somebody has to give Bob the temporary password, the API key, the initial
-admin credential. It ends up in chat or email, where it lives in searchable
-retention for years. SecureSend is the moment in between: the sender types the
-secret, sets a password and an expiry, and gets a link. The link and the
-password travel on different channels. Bob opens the link, enters the
-password, reads the message once, and it is gone.
+Somebody has to give Bob the temporary admin password, the API key, the VPN
+key, the initial credential for a new account. Today it goes into chat or
+email, and from that moment it lives in searchable retention for years:
+
+```
+TODAY
+
+  Alice → Teams: "temp admin pw: Dfj$938..."
+  Stored in Teams retention. Forever.
+
+SECURESEND
+
+  Alice → Bob:  https://send.acme.example/m/…
+  Password sent separately.
+  Bob opens it once. It's gone.
+  Audit: Alice → Bob, 10:32, read once.
+```
+
+SecureSend is the moment in between. The sender types the secret, sets a
+password and an expiry, and gets a link. Link and password travel on different
+channels. Bob opens the link, enters the password, reads the message once, and
+it no longer exists anywhere.
 
 Not a password manager. Not a vault. It handles the handoff.
+
+**Runs in your environment.** Your identity, your logs, your infrastructure.
+Cyphera never receives your secrets; there is no hosted service to send them
+to.
 
 ## What makes it different
 
@@ -122,6 +142,13 @@ security review asks for.
 
 The verification commands are in every release's notes and in
 [docs/deployment.md](docs/deployment.md).
+
+## Running it for an organization
+
+Everything in this repository is free to run, forever, under Apache-2.0. If
+you are rolling it out for an organization and want a support agreement,
+help with deployment and hardening, or a hand with the security questionnaire,
+write to hello@cyphera.io.
 
 ## Building
 
