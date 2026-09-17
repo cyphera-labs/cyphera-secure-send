@@ -1,7 +1,8 @@
 # Identity: enterprise mode with OpenID Connect
 
-Standalone mode is anyone with the link and the password. Enterprise mode
-puts your identity provider in front of both ends of the handoff:
+Eval mode is anyone with the link and the password, with typed, unverified
+sender and recipient addresses. Enterprise mode puts your identity provider
+in front of both ends of the handoff:
 
 - creating a message requires signing in, and the sender is the signed-in
   user, not a typed field;
@@ -33,12 +34,13 @@ which is the user principal name.
 **4. Configure SecureSend.**
 
 ```yaml
+mode: enterprise
+
 server:
   public_base_url: https://send.example.com
   hsts: true
 
 auth:
-  mode: oidc
   oidc:
     issuer: https://login.microsoftonline.com/<tenant-id>/v2.0
     client_id: <application (client) id>

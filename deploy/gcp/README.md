@@ -1,6 +1,6 @@
 # Deploy on Google Cloud
 
-Cloud Run, standalone shape: exactly one instance, never scaled to zero,
+Cloud Run, standalone shape, eval mode by default: exactly one instance, never scaled to zero,
 messages in its memory.
 
 ```
@@ -32,15 +32,15 @@ Enterprise mode: store the client secret in Secret Manager and reference it:
 
 ```
   --set-secrets "CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET=securesend-oidc-secret:latest" \
-  --set-env-vars "CYPHERA_SECURESEND__AUTH__MODE=oidc,\
+  --set-env-vars "CYPHERA_SECURESEND__MODE=enterprise,\
 CYPHERA_SECURESEND__AUTH__OIDC__ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0,\
 CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_ID=<application-id>,\
 CYPHERA_SECURESEND__AUTH__OIDC__ALLOWED_DOMAINS=example.com"
 ```
 
 `--allow-unauthenticated` refers to Cloud Run's own IAM check on the
-endpoint, not to SecureSend's sign-in; the service still requires OIDC
-sign-in in enterprise mode.
+endpoint, not to SecureSend's sign-in; the service still requires sign-in
+in enterprise mode.
 
 ## Why one instance and no scale-to-zero
 

@@ -9,7 +9,7 @@ let session: SessionView = { authenticated: false };
 const FRAGMENT_KEY = "securesend.fragment";
 
 function needsSignIn(): boolean {
-  return config.auth_mode === "oidc" && !session.authenticated;
+  return config.mode === "enterprise" && !session.authenticated;
 }
 
 /** Sends the browser to the provider. The fragment never reaches the server,
@@ -59,7 +59,7 @@ function header(): HTMLElement {
   name.append(config.product_name);
   brand.append(name);
   const header = h("header", { class: "top" }, brand);
-  if (config.auth_mode === "oidc" && session.authenticated) {
+  if (config.mode === "enterprise" && session.authenticated) {
     header.append(
       h("div", { class: "who" },
         h("span", { class: "who-email" }, session.email ?? ""),
@@ -93,9 +93,22 @@ function footer(): HTMLElement {
   return f;
 }
 
+function evalBanner(): HTMLElement | null {
+  if (config.mode !== "eval") return null;
+  return h(
+    "div",
+    { class: "mode-banner", role: "note" },
+    h("strong", {}, "Evaluation mode."),
+    " Sender and recipient identities are not verified. Intended for evaluation and testing; enable Enterprise mode for authenticated organizational use.",
+  );
+}
+
 function page(...content: HTMLElement[]): void {
   clear(root);
-  root.append(header(), h("main", { class: "page" }, ...content), footer());
+  root.append(header());
+  const banner = evalBanner();
+  if (banner) root.append(banner);
+  root.append(h("main", { class: "page" }, ...content), footer());
   root.hidden = false;
 }
 
@@ -433,7 +446,7 @@ async function boot(): Promise<void> {
     return;
   }
   applyBranding(config);
-  if (config.auth_mode === "oidc") {
+  if (config.mode === "enterprise") {
     session = await loadSession();
     restoreFragment();
   }

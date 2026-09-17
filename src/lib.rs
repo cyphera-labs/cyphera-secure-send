@@ -20,7 +20,7 @@ use application::{MessageLimits, MessageService};
 use audit::{AuditSink, DiscardSink, StdoutJsonSink};
 use auth::oidc::{OidcError, OidcProvider};
 use auth::{AnonymousAuthorizer, ConsumeAuthorizer, OidcAuthorizer};
-use config::{AuditSinkKind, AuthMode, Settings, StorageBackend};
+use config::{AuditSinkKind, Mode, Settings, StorageBackend};
 use domain::EnvelopeLimits;
 use storage::MessageStore;
 use storage::memory::MemoryStore;
@@ -56,9 +56,9 @@ pub async fn build_state(
     };
 
     let (authorizer, oidc): (Arc<dyn ConsumeAuthorizer>, Option<Arc<OidcProvider>>) =
-        match settings.auth.mode {
-            AuthMode::Anonymous => (Arc::new(AnonymousAuthorizer), None),
-            AuthMode::Oidc => {
+        match settings.mode {
+            Mode::Eval => (Arc::new(AnonymousAuthorizer), None),
+            Mode::Enterprise => {
                 let o = &settings.auth.oidc;
                 let base = settings
                     .server

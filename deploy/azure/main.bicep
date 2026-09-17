@@ -22,9 +22,9 @@ param companyName string = ''
 @description('Primary brand color, #rgb or #rrggbb.')
 param primaryColor string = '#1f4e79'
 
-@description('anonymous: anyone with the link and the password. oidc: sign-in required, recipient binding on.')
-@allowed(['anonymous', 'oidc'])
-param authMode string = 'anonymous'
+@description('eval: anyone with the link and the password; identities typed, not verified. enterprise: sign-in at your identity provider, verified sender, recipient binding.')
+@allowed(['eval', 'enterprise'])
+param mode string = 'eval'
 
 @description('OIDC issuer. For Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0')
 param oidcIssuer string = ''
@@ -50,7 +50,7 @@ var envName = '${name}-env'
 var appName = '${name}-app'
 var logName = '${name}-logs'
 var publicBaseUrl = 'https://${appName}.${env.properties.defaultDomain}'
-var oidcEnabled = authMode == 'oidc'
+var oidcEnabled = mode == 'enterprise'
 
 resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logName
@@ -115,7 +115,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'CYPHERA_SECURESEND__MESSAGES__MEMORY_BUDGET_BYTES', value: string(memoryBudgetBytes) }
             { name: 'CYPHERA_SECURESEND__BRANDING__COMPANY_NAME', value: companyName }
             { name: 'CYPHERA_SECURESEND__BRANDING__COLORS__PRIMARY', value: primaryColor }
-            { name: 'CYPHERA_SECURESEND__AUTH__MODE', value: authMode }
+            { name: 'CYPHERA_SECURESEND__MODE', value: mode }
           ], oidcEnabled ? [
             { name: 'CYPHERA_SECURESEND__AUTH__OIDC__ISSUER', value: oidcIssuer }
             { name: 'CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_ID', value: oidcClientId }

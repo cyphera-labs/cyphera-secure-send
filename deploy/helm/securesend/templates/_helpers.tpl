@@ -39,6 +39,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
 {{- end -}}
 
+{{- define "securesend.enterprise" -}}
+{{- if eq .Values.mode "enterprise" -}}true{{- end -}}
+{{- end -}}
+
 {{- define "securesend.oidcSecretName" -}}
 {{- if .Values.oidc.existingSecret -}}
 {{- .Values.oidc.existingSecret -}}
@@ -50,6 +54,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/* The configuration file as rendered into the ConfigMap. */}}
 {{- define "securesend.config" -}}
 {{- $cfg := deepCopy .Values.config -}}
+{{- $_ := set $cfg "mode" .Values.mode -}}
 {{- $_ := set $cfg "storage" (dict "backend" .Values.storage.backend) -}}
 {{- if .Values.branding.existingConfigMap -}}
 {{- $b := index $cfg "branding" -}}

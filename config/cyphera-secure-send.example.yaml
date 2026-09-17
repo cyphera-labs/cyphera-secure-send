@@ -3,9 +3,15 @@
 #   CYPHERA_SECURESEND__<SECTION>__<KEY>, for example
 #   CYPHERA_SECURESEND__BRANDING__COMPANY_NAME=Acme
 
+# eval: anyone with the link and the password; sender and recipient are typed
+#       and not verified. For trying the product, labs, and cloud evaluation.
+# enterprise: users sign in at your identity provider (auth.oidc below); the
+#       sender is the signed-in identity and only the named recipient can read.
+mode: eval
+
 server:
   bind: 0.0.0.0:8080
-  public_base_url: null             # e.g. https://send.example.com; required for auth.mode oidc
+  public_base_url: null             # e.g. https://send.example.com; required for mode enterprise
   management_bind: 127.0.0.1:9090   # liveness, readiness, metrics; keep private
   trusted_proxies: []               # CIDRs whose X-Forwarded-For is honored
   hsts: false                       # enable when served over HTTPS
@@ -31,6 +37,8 @@ rate_limits:
   create_per_minute: 10             # per client address
   consume_per_minute: 30
   revoke_per_minute: 30
+  identity_create_per_minute: 30    # per signed-in identity, enterprise mode
+  identity_consume_per_minute: 60
 
 storage:
   backend: memory
@@ -41,8 +49,7 @@ audit:
   include_user_agent: false
 
 auth:
-  mode: anonymous                   # or oidc: sign-in required, recipient binding on
-  oidc:
+  oidc:                             # used when mode is enterprise
     issuer: ""                      # Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0
     client_id: ""
     # client_secret: set CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET, or:

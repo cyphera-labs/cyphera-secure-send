@@ -8,7 +8,7 @@ Initial implementation.
   link secret in the URL fragment and a proof-of-password consume.
 - In-memory message store with per-message expiry, a byte budget, atomic
   take, failed-proof burning, and sender revocation.
-- Uniform failure responses, strict security headers, size and rate limits,
+- Uniform failure responses, strict security headers, size and rate limits per address and, in enterprise mode, per signed-in identity,
   trusted-proxy client address resolution.
 - JSON audit events on stdout, Prometheus metrics, liveness and readiness,
   JSON health and stats on the management listener, graceful shutdown,
@@ -17,7 +17,7 @@ Initial implementation.
   support link.
 - Container image on a minimal nonroot base; release workflow with signed
   artifacts, SBOMs, and provenance.
-- Enterprise mode: OpenID Connect sign-in with PKCE, state, and nonce;
+- Two modes. Eval, the default, with typed and unverified identities and a visible banner. Enterprise: OpenID Connect sign-in with PKCE, state, and nonce;
   server-side sessions; the sender is the signed-in identity; recipient
   binding enforced inside the atomic take; allowed domains; closed by default.
   Entra ID documented first, any standards-compliant provider works.

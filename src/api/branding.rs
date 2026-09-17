@@ -113,7 +113,7 @@ pub struct UiConfig {
     pub max_plaintext_bytes: usize,
     pub kdf_iterations: u32,
     pub max_failed_proofs: u32,
-    pub auth_mode: crate::config::AuthMode,
+    pub mode: crate::config::Mode,
     pub version: &'static str,
 }
 
@@ -135,7 +135,7 @@ pub async fn ui_config(State(state): State<SharedState>) -> Json<UiConfig> {
         max_plaintext_bytes: s.messages.max_plaintext_bytes,
         kdf_iterations: s.messages.kdf.recommended_iterations,
         max_failed_proofs: s.messages.max_failed_proofs,
-        auth_mode: s.auth.mode,
+        mode: s.mode,
         version: env!("CARGO_PKG_VERSION"),
     })
 }

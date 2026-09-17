@@ -19,9 +19,10 @@ async function createMessage(page: Page): Promise<{ link: string; revokeLink: st
   return { link, revokeLink };
 }
 
-test("branding from configuration is applied", async ({ page }) => {
+test("branding from configuration is applied and eval mode is announced", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveTitle("Acme Cyphera SecureSend");
+  await expect(page.getByText(/Evaluation mode\./)).toBeVisible();
   const primary = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--md-primary").trim());
   expect(primary).toBe("#0057b8");
 });

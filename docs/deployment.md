@@ -98,7 +98,7 @@ works against it:
 | Google Cloud Run | scales to zero; max instances is a soft limit | same: pin min and max instances to 1, and accept that a revision rollout replaces the instance |
 | AWS ECS on Fargate | service deployments start the replacement before stopping the old task | set minimum healthy percent to 0 and maximum to 100 so only one task ever runs, and expect task replacement on platform maintenance |
 
-In OIDC mode, sessions and in-progress sign-ins live in the same process
+In enterprise mode, sessions and in-progress sign-ins live in the same process
 memory, so the single-instance rule covers them too: a second instance would
 not know who signed in at the first.
 

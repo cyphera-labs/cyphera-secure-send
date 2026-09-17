@@ -52,6 +52,15 @@ impl AuditEventType {
     }
 }
 
+/// Whether the sender and recipient on an event were typed by the user
+/// (eval mode) or established by the identity provider (enterprise mode).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Identities {
+    Asserted,
+    Verified,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -93,6 +102,8 @@ pub struct AuditEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipient: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub identities: Option<Identities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl_seconds: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
@@ -123,6 +134,7 @@ impl AuditEvent {
             message_id: None,
             sender: None,
             recipient: None,
+            identities: None,
             ttl_seconds: None,
             expires_at: None,
             failed_proofs: None,
@@ -154,6 +166,17 @@ impl AuditEvent {
         self.user_agent = client.user_agent.clone();
         self.subject = client.subject.clone();
         self.issuer = client.issuer.clone();
+        self
+    }
+
+    /// Marks sender and recipient as verified when the caller is signed in,
+    /// asserted otherwise.
+    pub fn with_identities(mut self, verified: bool) -> Self {
+        self.identities = Some(if verified {
+            Identities::Verified
+        } else {
+            Identities::Asserted
+        });
         self
     }
 }

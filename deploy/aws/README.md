@@ -1,6 +1,6 @@
 # Deploy on AWS
 
-ECS Fargate behind an Application Load Balancer, standalone shape: exactly
+ECS Fargate behind an Application Load Balancer, standalone shape, eval mode by default: exactly
 one task, messages in its memory, deployments that replace rather than
 overlap, the management port bound to the task's loopback only.
 
@@ -22,14 +22,14 @@ load balancer for production; the certificate must cover that name.
 Enterprise mode, with Entra ID (see [docs/identity.md](../../docs/identity.md)):
 
 ```
-    AuthMode=oidc \
+    Mode=enterprise \
     OidcIssuer=https://login.microsoftonline.com/<tenant-id>/v2.0 \
     OidcClientId=<application-id> \
     OidcClientSecret=<secret> \
     AllowedDomains=example.com
 ```
 
-The template refuses OIDC mode without a certificate, an issuer, a client id,
+The template refuses enterprise mode without a certificate, an issuer, a client id,
 and a secret. The secret is stored in Secrets Manager and injected into the
 task; it never appears in the task definition.
 

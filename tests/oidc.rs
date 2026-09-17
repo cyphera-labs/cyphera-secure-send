@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use cyphera_secure_send::api::public_router;
 use cyphera_secure_send::audit::{MemorySink, Reason};
-use cyphera_secure_send::config::{AuthMode, Settings};
+use cyphera_secure_send::config::{Mode, Settings};
 
 // ------------------------------------------------------------ fake provider
 
@@ -203,7 +203,7 @@ async fn start_app(idp: &Idp, tweak: impl FnOnce(&mut Settings)) -> App {
     let base = format!("http://{addr}");
     let mut settings = Settings::default();
     settings.server.public_base_url = Some(base.clone());
-    settings.auth.mode = AuthMode::Oidc;
+    settings.mode = Mode::Enterprise;
     settings.auth.oidc.issuer = idp.issuer.clone();
     settings.auth.oidc.client_id = idp.client_id.clone();
     settings.auth.oidc.client_secret = Some(idp.client_secret.clone());
@@ -546,7 +546,7 @@ async fn ui_config_reports_the_mode_and_cookies_are_http_only_lax() {
         .json()
         .await
         .unwrap();
-    assert_eq!(v["auth_mode"], "oidc");
+    assert_eq!(v["mode"], "enterprise");
 
     let r = c
         .get(format!("{}/auth/login?next=/", app.base))

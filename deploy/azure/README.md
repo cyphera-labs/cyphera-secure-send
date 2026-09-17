@@ -1,7 +1,9 @@
 # Deploy to Azure
 
-Azure Container Apps, standalone shape: exactly one instance, messages in its
-memory, HTTPS from the platform, the management port private.
+Azure Container Apps, standalone shape, eval mode by default: exactly one
+instance, messages in its memory, HTTPS from the platform, the management
+port private. Try the whole product in your own subscription without an
+identity provider; switch to enterprise mode when it is real.
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fcyphera-labs%2Fcyphera-secure-send%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json)
 
@@ -22,7 +24,7 @@ Enterprise mode, with Entra ID (see [docs/identity.md](../../docs/identity.md)):
 
 ```
 az deployment group create -g securesend -f main.bicep \
-  -p authMode=oidc \
+  -p mode=enterprise \
      oidcIssuer=https://login.microsoftonline.com/<tenant-id>/v2.0 \
      oidcClientId=<application-id> \
      oidcClientSecret=<secret> \

@@ -23,7 +23,7 @@ export interface UiConfig {
   max_plaintext_bytes: number;
   kdf_iterations: number;
   max_failed_proofs: number;
-  auth_mode: "anonymous" | "oidc";
+  mode: "eval" | "enterprise";
   version: string;
 }
 

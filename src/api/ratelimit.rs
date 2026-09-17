@@ -10,11 +10,14 @@ use std::time::Duration;
 use crate::config::RateLimitSettings;
 
 type Limiter = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
+type IdentityLimiter = RateLimiter<String, DefaultKeyedStateStore<String>, DefaultClock>;
 
 pub struct Limiters {
     pub create: Limiter,
     pub consume: Limiter,
     pub revoke: Limiter,
+    pub identity_create: IdentityLimiter,
+    pub identity_consume: IdentityLimiter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,13 +42,31 @@ fn per_minute(n: u32) -> Limiter {
     RateLimiter::keyed(Quota::per_minute(n))
 }
 
+fn per_minute_by_identity(n: u32) -> IdentityLimiter {
+    let n = NonZeroU32::new(n.max(1)).expect("nonzero");
+    RateLimiter::keyed(Quota::per_minute(n))
+}
+
 impl Limiters {
     pub fn new(settings: &RateLimitSettings) -> Self {
         Self {
             create: per_minute(settings.create_per_minute),
             consume: per_minute(settings.consume_per_minute),
             revoke: per_minute(settings.revoke_per_minute),
+            identity_create: per_minute_by_identity(settings.identity_create_per_minute),
+            identity_consume: per_minute_by_identity(settings.identity_consume_per_minute),
         }
+    }
+
+    /// The per-identity bucket for a signed-in caller. Revoke has no identity
+    /// dimension: it is bounded per address and by the token itself.
+    pub fn check_identity(&self, endpoint: Endpoint, subject: &str) -> bool {
+        let limiter = match endpoint {
+            Endpoint::Create => &self.identity_create,
+            Endpoint::Consume => &self.identity_consume,
+            Endpoint::Revoke => return true,
+        };
+        limiter.check_key(&subject.to_owned()).is_ok()
     }
 
     pub fn check(&self, endpoint: Endpoint, ip: IpAddr) -> bool {
@@ -62,6 +83,8 @@ impl Limiters {
         self.create.retain_recent();
         self.consume.retain_recent();
         self.revoke.retain_recent();
+        self.identity_create.retain_recent();
+        self.identity_consume.retain_recent();
     }
 
     pub const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(120);
@@ -77,6 +100,8 @@ mod tests {
             create_per_minute: 2,
             consume_per_minute: 2,
             revoke_per_minute: 2,
+            identity_create_per_minute: 1,
+            identity_consume_per_minute: 1,
         });
         let a: IpAddr = "192.0.2.1".parse().unwrap();
         let b: IpAddr = "192.0.2.2".parse().unwrap();
@@ -85,5 +110,9 @@ mod tests {
         assert!(!l.check(Endpoint::Create, a));
         assert!(l.check(Endpoint::Create, b));
         assert!(l.check(Endpoint::Consume, a));
+        assert!(l.check_identity(Endpoint::Create, "sub-1"));
+        assert!(!l.check_identity(Endpoint::Create, "sub-1"));
+        assert!(l.check_identity(Endpoint::Create, "sub-2"));
+        assert!(l.check_identity(Endpoint::Revoke, "sub-1"));
     }
 }

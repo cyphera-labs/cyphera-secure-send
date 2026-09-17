@@ -21,6 +21,9 @@ pub enum ConfigError {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// The product mode. `eval` records who users say they are; `enterprise`
+    /// verifies who they are through the identity provider in `auth.oidc`.
+    pub mode: Mode,
     pub server: ServerSettings,
     pub messages: MessageSettings,
     pub rate_limits: RateLimitSettings,
@@ -95,9 +98,14 @@ pub struct KdfSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RateLimitSettings {
+    /// Per client address.
     pub create_per_minute: u32,
     pub consume_per_minute: u32,
     pub revoke_per_minute: u32,
+    /// Per signed-in identity, enterprise mode only. Bounds a signed-in
+    /// caller regardless of how many addresses they come from.
+    pub identity_create_per_minute: u32,
+    pub identity_consume_per_minute: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -130,22 +138,25 @@ pub enum AuditSinkKind {
     Discard,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AuthSettings {
-    pub mode: AuthMode,
-    pub oidc: OidcSettings,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    /// Evaluation: anyone with the link and the password. Sender and
+    /// recipient are typed and not verified. For trying the product, labs,
+    /// and cloud evaluation; not for production.
+    #[default]
+    Eval,
+    /// Enterprise: users sign in at an OpenID Connect provider. Closed by
+    /// default: creating and reading both require a session, the sender is
+    /// the signed-in identity, and a message can only be read by the
+    /// recipient it names.
+    Enterprise,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthMode {
-    /// Anyone with the link and the password. Sender and recipient are typed.
-    Anonymous,
-    /// Users sign in at an OpenID Connect provider. Closed by default: creating
-    /// and reading both require a session, and a message can only be read by
-    /// the recipient it names.
-    Oidc,
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuthSettings {
+    pub oidc: OidcSettings,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -284,6 +295,8 @@ impl Default for RateLimitSettings {
             create_per_minute: 10,
             consume_per_minute: 30,
             revoke_per_minute: 30,
+            identity_create_per_minute: 30,
+            identity_consume_per_minute: 60,
         }
     }
 }
@@ -302,15 +315,6 @@ impl Default for AuditSettings {
             sink: AuditSinkKind::Stdout,
             include_client_ip: false,
             include_user_agent: false,
-        }
-    }
-}
-
-impl Default for AuthSettings {
-    fn default() -> Self {
-        Self {
-            mode: AuthMode::Anonymous,
-            oidc: OidcSettings::default(),
         }
     }
 }
@@ -456,15 +460,17 @@ impl Settings {
                 ));
             }
         }
-        if self.auth.mode == AuthMode::Oidc {
+        if self.mode == Mode::Enterprise {
             let o = &self.auth.oidc;
             if self.server.public_base_url.is_none() {
                 return Err(ConfigError::Invalid(
-                    "auth.mode oidc requires server.public_base_url".into(),
+                    "mode enterprise requires server.public_base_url".into(),
                 ));
             }
             let issuer = url::Url::parse(&o.issuer).map_err(|_| {
-                ConfigError::Invalid("auth.oidc.issuer must be an absolute URL".into())
+                ConfigError::Invalid(
+                    "mode enterprise requires auth.oidc.issuer, an absolute URL".into(),
+                )
             })?;
             let local = matches!(
                 issuer.host_str(),
@@ -641,9 +647,11 @@ mod tests {
     }
 
     #[test]
-    fn oidc_mode_demands_its_inputs() {
-        let mut s = Settings::default();
-        s.auth.mode = AuthMode::Oidc;
+    fn enterprise_mode_demands_its_inputs() {
+        let mut s = Settings {
+            mode: Mode::Enterprise,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
         s.server.public_base_url = Some("https://send.example.com".into());
         assert!(s.validate().is_err());

@@ -178,7 +178,7 @@ jobs:
           helm template securesend deploy/helm/securesend > /dev/null
           helm template securesend deploy/helm/securesend \
             --set config.server.public_base_url=https://send.example.com \
-            --set config.auth.mode=oidc --set config.auth.oidc.issuer=https://idp.example/ \
+            --set mode=enterprise --set config.auth.oidc.issuer=https://idp.example/ \
             --set config.auth.oidc.client_id=app --set oidc.clientSecret=x \
             --set ingress.enabled=true --set management.service.enabled=true \
             --set management.serviceMonitor.enabled=true > /dev/null

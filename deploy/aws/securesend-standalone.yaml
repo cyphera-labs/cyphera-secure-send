@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Cyphera SecureSend, standalone shape on ECS Fargate behind an Application Load
-  Balancer. Exactly one task; messages live in its memory. Deployments replace
+  Balancer, eval mode by default. Exactly one task; messages live in its memory. Deployments replace
   the task (minimum healthy 0, maximum 100) so two instances never overlap.
 
 Metadata:
@@ -12,7 +12,7 @@ Metadata:
       - Label: { default: Service }
         Parameters: [Image, CertificateArn, CompanyName, PrimaryColor, DefaultTtlSeconds, MemoryBudgetBytes]
       - Label: { default: Identity (enterprise mode) }
-        Parameters: [AuthMode, OidcIssuer, OidcClientId, OidcClientSecret, AllowedDomains]
+        Parameters: [Mode, OidcIssuer, OidcClientId, OidcClientSecret, AllowedDomains]
 
 Parameters:
   VpcId:
@@ -43,10 +43,11 @@ Parameters:
   MemoryBudgetBytes:
     Type: Number
     Default: 134217728
-  AuthMode:
+  Mode:
     Type: String
-    Default: anonymous
-    AllowedValues: [anonymous, oidc]
+    Default: eval
+    AllowedValues: [eval, enterprise]
+    Description: eval records who users say they are; enterprise verifies them through your identity provider.
   OidcIssuer:
     Type: String
     Default: ""
@@ -66,20 +67,20 @@ Parameters:
 
 Rules:
   OidcNeedsSecretAndHttps:
-    RuleCondition: !Equals [!Ref AuthMode, oidc]
+    RuleCondition: !Equals [!Ref Mode, enterprise]
     Assertions:
       - Assert: !Not [!Equals [!Ref OidcClientSecret, ""]]
-        AssertDescription: auth mode oidc requires OidcClientSecret
+        AssertDescription: mode enterprise requires OidcClientSecret
       - Assert: !Not [!Equals [!Ref OidcIssuer, ""]]
-        AssertDescription: auth mode oidc requires OidcIssuer
+        AssertDescription: mode enterprise requires OidcIssuer
       - Assert: !Not [!Equals [!Ref OidcClientId, ""]]
-        AssertDescription: auth mode oidc requires OidcClientId
+        AssertDescription: mode enterprise requires OidcClientId
       - Assert: !Not [!Equals [!Ref CertificateArn, ""]]
-        AssertDescription: auth mode oidc requires HTTPS, so CertificateArn is required
+        AssertDescription: mode enterprise requires HTTPS, so CertificateArn is required
 
 Conditions:
   UseHttps: !Not [!Equals [!Ref CertificateArn, ""]]
-  UseOidc: !Equals [!Ref AuthMode, oidc]
+  UseOidc: !Equals [!Ref Mode, enterprise]
 
 Resources:
   Cluster:
@@ -257,8 +258,8 @@ Resources:
               Value: !Ref CompanyName
             - Name: CYPHERA_SECURESEND__BRANDING__COLORS__PRIMARY
               Value: !Ref PrimaryColor
-            - Name: CYPHERA_SECURESEND__AUTH__MODE
-              Value: !Ref AuthMode
+            - Name: CYPHERA_SECURESEND__MODE
+              Value: !Ref Mode
             - Name: CYPHERA_SECURESEND__AUTH__OIDC__ISSUER
               Value: !Ref OidcIssuer
             - Name: CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_ID

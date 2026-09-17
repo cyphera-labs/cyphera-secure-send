@@ -211,7 +211,8 @@ impl MessageService {
         bump(&self.counters.created);
         let mut event = AuditEvent::success(AuditEventType::MessageCreated)
             .with_message(&id)
-            .with_client(client);
+            .with_client(client)
+            .with_identities(principal.is_authenticated());
         event.sender = Some(sender.to_string());
         event.recipient = Some(recipient.to_string());
         event.ttl_seconds = Some(request.ttl_seconds as i64);
@@ -250,7 +251,8 @@ impl MessageService {
                 bump(&self.counters.consumed);
                 let mut event = AuditEvent::success(AuditEventType::MessageConsumed)
                     .with_message(&id)
-                    .with_client(client);
+                    .with_client(client)
+                    .with_identities(principal.is_authenticated());
                 event.sender = Some(message.sender.to_string());
                 event.recipient = Some(message.recipient.to_string());
                 event.ttl_seconds = Some(message.ttl_seconds());

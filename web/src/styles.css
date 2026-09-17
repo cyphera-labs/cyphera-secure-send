@@ -60,6 +60,15 @@ body {
 input.readonly { background: var(--md-surface-variant); color: color-mix(in srgb, var(--md-on-surface) 72%, transparent); }
 .brand-company { color: var(--md-primary); }
 
+.mode-banner {
+  margin: 0 16px;
+  padding: 10px 16px;
+  border-radius: var(--radius-m);
+  background: var(--md-secondary-container);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
 .page {
   flex: 1;
   display: flex;

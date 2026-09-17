@@ -18,12 +18,22 @@ with a message naming the key.
 
 A complete annotated file is at `config/cyphera-secure-send.example.yaml`.
 
+## mode
+
+| Value | Meaning |
+|---|---|
+| `eval` (default) | Anyone with the link and the password. Sender and recipient are typed and **not verified**; audit events mark them `asserted`. For trying the product, labs, and cloud evaluation. The interface shows an evaluation banner. |
+| `enterprise` | Users sign in at your identity provider (`auth.oidc`). The sender is the signed-in identity, only the named recipient can read, senders and recipients can be limited to your domains, and audit events mark identities `verified`. Requires `server.public_base_url`. See [identity.md](identity.md). |
+
+Eval mode records who users say they are. Enterprise mode verifies who they
+are.
+
 ## server
 
 | Key | Default | Notes |
 |---|---|---|
 | `bind` | `0.0.0.0:8080` | public listener |
-| `public_base_url` | unset | the URL users reach the service at; required in OIDC mode |
+| `public_base_url` | unset | the URL users reach the service at; required in enterprise mode |
 | `management_bind` | `127.0.0.1:9090` | `/livez`, `/readyz`, `/metrics`. Keep it off the public network |
 | `trusted_proxies` | `[]` | CIDRs. `X-Forwarded-For` is honored only when the peer is inside one |
 | `hsts` | `false` | emit `Strict-Transport-Security`; enable once HTTPS is in place |
@@ -45,9 +55,13 @@ A complete annotated file is at `config/cyphera-secure-send.example.yaml`.
 
 ## rate_limits
 
-Per client address, token bucket, per minute: `create_per_minute` (10),
+Token buckets, per minute. Per client address: `create_per_minute` (10),
 `consume_per_minute` (30), `revoke_per_minute` (30). Behind a proxy, set
 `server.trusted_proxies` or every client shares one bucket.
+
+In enterprise mode a second bucket applies per signed-in identity, so a
+caller is bounded however many addresses they come from:
+`identity_create_per_minute` (30), `identity_consume_per_minute` (60).
 
 ## storage
 
@@ -64,9 +78,7 @@ and vanish on restart.
 
 ## auth
 
-`mode: anonymous` (default) is anyone with the link and the password.
-`mode: oidc` puts your identity provider in front of both ends; see
-[identity.md](identity.md).
+Used in enterprise mode; see [identity.md](identity.md).
 
 | Key | Default | Notes |
 |---|---|---|

@@ -83,7 +83,11 @@ fn rate_limited(
     ip: std::net::IpAddr,
     ctx: &ClientContext,
 ) -> Result<(), ApiError> {
-    if state.limiters.check(endpoint, ip) {
+    let within_identity = match &ctx.subject {
+        Some(subject) => state.limiters.check_identity(endpoint, subject),
+        None => true,
+    };
+    if within_identity && state.limiters.check(endpoint, ip) {
         return Ok(());
     }
     metrics::counter!("securesend_rate_limited_total", "endpoint" => endpoint.as_str())

@@ -98,7 +98,7 @@ Each of these is enforced by a test.
 14. Only JSON bodies with `Content-Type: application/json` are accepted, and
     there is no CORS policy, so a cross-origin page cannot make the API do
     anything: the preflight fails.
-15. In OIDC mode, what a caller may take is decided from the caller alone,
+15. In enterprise mode, what a caller may take is decided from the caller alone,
     before the store is touched, as plain data (deny, or the recipient the
     message must name), and enforced inside the same atomic step as the
     proof check and before it: a caller who is not the named recipient gets
@@ -128,7 +128,7 @@ Each of these is enforced by a test.
 | Cross-site request forgery | yes | JSON-only API, no CORS; session cookies are `SameSite=Lax` |
 | Login CSRF and authorization-code injection | yes | state bound to a login cookie, single-use, PKCE, nonce in the ID token |
 | Stolen or forged ID token | yes | signature against the provider's keys, issuer, audience, expiry, and nonce all verified; tokens never reach the browser |
-| Reading someone else's message with a valid link and password | yes, in OIDC mode | recipient binding inside the atomic take |
+| Reading someone else's message with a valid link and password | yes, in enterprise mode | recipient binding inside the atomic take |
 | Cross-site scripting | yes | no inline script or style, all text set via DOM APIs |
 | Hosting malware or phishing content | partly | text only, small size limit; enterprise mode will close anonymous creation |
 | Compromised server serving modified JavaScript | **no** | this is the honest limit of browser-side encryption: a malicious server can attack *future* users. Mitigations: signed releases, reproducible interface build, strict CSP, and deploying behind an identity boundary |

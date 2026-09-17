@@ -1,6 +1,11 @@
 # Cyphera SecureSend. The defaults deploy the standalone shape: one replica,
 # messages in process memory, management port private to the cluster.
 
+# eval: anyone with the link and the password; identities typed, not verified.
+# enterprise: sign-in at your identity provider (config.auth.oidc); the
+# sender is the signed-in identity and only the named recipient can read.
+mode: eval
+
 image:
   repository: ghcr.io/cyphera-labs/cyphera-secure-send
   # Defaults to the chart's appVersion.
@@ -38,12 +43,13 @@ config:
     create_per_minute: 10
     consume_per_minute: 30
     revoke_per_minute: 30
+    identity_create_per_minute: 30
+    identity_consume_per_minute: 60
   audit:
     sink: stdout
     include_client_ip: false
     include_user_agent: false
   auth:
-    mode: anonymous
     oidc:
       issuer: ""
       client_id: ""

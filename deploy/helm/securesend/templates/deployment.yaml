@@ -1,8 +1,8 @@
 {{- if and (eq .Values.storage.backend "memory") (gt (int .Values.replicaCount) 1) -}}
 {{- fail "securesend: the memory backend holds messages in one process; replicaCount must be 1 (a second replica would have its own, separate messages)" -}}
 {{- end -}}
-{{- if and (eq (index .Values.config "auth" "mode") "oidc") (not (index .Values.config "server" "public_base_url")) -}}
-{{- fail "securesend: auth.mode oidc requires config.server.public_base_url" -}}
+{{- if and (eq .Values.mode "enterprise") (not (index .Values.config "server" "public_base_url")) -}}
+{{- fail "securesend: mode enterprise requires config.server.public_base_url" -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -50,7 +50,7 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           env:
-            {{- if eq (index .Values.config "auth" "mode") "oidc" }}
+            {{- if eq .Values.mode "enterprise" }}
             - name: CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
