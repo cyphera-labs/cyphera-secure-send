@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "securesend.fullname" . }}
+  labels:
+    {{- include "securesend.labels" . | nindent 4 }}
+data:
+  cyphera-secure-send.yaml: |
+    {{- include "securesend.config" . | nindent 4 }}

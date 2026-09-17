@@ -78,6 +78,10 @@ or download the binary from a release and:
 
 Open `http://localhost:8080`.
 
+Kubernetes, Azure, AWS, and Google Cloud: see [deploy/](deploy/), including
+a Helm chart and a Deploy to Azure button. All deploy the standalone shape,
+one instance with messages in its memory.
+
 Brand it:
 
 ```
@@ -124,7 +128,8 @@ to your domains. Setup for Entra ID and others: [docs/identity.md](docs/identity
 - [Identity and enterprise mode](docs/identity.md)
 - [Configuration](docs/configuration.md)
 - [Branding](docs/branding.md)
-- [Deployment](docs/deployment.md): container, Kubernetes, metrics, audit, air-gap, verifying releases
+- [Deployment](docs/deployment.md): container, Kubernetes, managed platforms, metrics, audit, air-gap, verifying releases
+- [Deploy templates](deploy/): Helm chart, Azure, AWS, Google Cloud
 
 ## API
 

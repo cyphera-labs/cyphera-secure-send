@@ -1,0 +1,19 @@
+Cyphera SecureSend is deployed as {{ include "securesend.fullname" . }}.
+
+Shape: {{ .Values.replicaCount }} replica, {{ .Values.storage.backend }} backend, strategy Recreate.
+Pending messages are discarded on every restart or upgrade; that is by design.
+
+{{- if .Values.ingress.enabled }}
+URL: {{ range .Values.ingress.hosts }}https://{{ .host }}{{ end }}
+{{- else }}
+No ingress. To try it from your machine:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "securesend.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080
+{{- end }}
+
+Health, readiness, stats, and metrics are on the management port ({{ .Values.management.port }}), which the
+public Service does not expose:
+  kubectl -n {{ .Release.Namespace }} port-forward deploy/{{ include "securesend.fullname" . }} 9090:{{ .Values.management.port }}
+  curl http://localhost:9090/v1/stats
+
+Auth mode: {{ index .Values.config "auth" "mode" }}. Enterprise setup: https://github.com/cyphera-labs/cyphera-secure-send/blob/main/docs/identity.md

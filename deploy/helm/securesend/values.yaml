@@ -1,0 +1,152 @@
+# Cyphera SecureSend. The defaults deploy the standalone shape: one replica,
+# messages in process memory, management port private to the cluster.
+
+image:
+  repository: ghcr.io/cyphera-labs/cyphera-secure-send
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Messages live in the memory of one process. With the memory backend the
+# chart refuses any value other than 1.
+replicaCount: 1
+
+storage:
+  backend: memory
+
+# Rendered into the service's configuration file. Every key from
+# docs/configuration.md is valid here. Secrets do not belong in this map;
+# see `oidc.clientSecret` and `existingSecret`.
+config:
+  server:
+    # Set to the URL users reach the service at; required in OIDC mode and
+    # used to decide whether cookies are marked Secure.
+    public_base_url: ""
+    hsts: true
+    # Pod networks and the ingress controller. X-Forwarded-For is honored
+    # only from these ranges.
+    trusted_proxies: []
+  messages:
+    ttl_options_seconds: [300, 900, 3600, 28800, 86400]
+    default_ttl_seconds: 3600
+    max_ttl_seconds: 86400
+    max_plaintext_bytes: 65536
+    memory_budget_bytes: 268435456
+    max_failed_proofs: 5
+  rate_limits:
+    create_per_minute: 10
+    consume_per_minute: 30
+    revoke_per_minute: 30
+  audit:
+    sink: stdout
+    include_client_ip: false
+    include_user_agent: false
+  auth:
+    mode: anonymous
+    oidc:
+      issuer: ""
+      client_id: ""
+      allowed_domains: []
+      require_recipient_match: true
+      anonymous_create: false
+      anonymous_consume: false
+  branding:
+    product_name: Cyphera SecureSend
+    company_name: ""
+    tagline: Share sensitive information securely.
+    support_url: ""
+    footer_text: ""
+    show_powered_by: true
+    colors:
+      primary: "#1f4e79"
+      on_primary: "#ffffff"
+      secondary: "#4f6d8a"
+      surface: "#fbfcfe"
+      on_surface: "#191c1e"
+      surface_variant: "#e1e5ea"
+      error: "#ba1a1a"
+
+oidc:
+  # The OIDC client secret. Prefer `existingSecret`; setting the value here
+  # stores it in a chart-managed Secret.
+  clientSecret: ""
+  # Name of a Secret with key `client-secret`. Wins over clientSecret.
+  existingSecret: ""
+
+# Logo and favicon: name a ConfigMap (or Secret) holding `logo.svg` and/or
+# `favicon.png`; it is mounted at /branding and wired into the config.
+branding:
+  existingConfigMap: ""
+  logoFile: ""
+  faviconFile: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+# Liveness, readiness, and metrics. Never exposed by the Service above.
+management:
+  port: 9090
+  # Create a separate ClusterIP Service for the management port, for a
+  # Prometheus scrape target.
+  service:
+    enabled: false
+    annotations: {}
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: send.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    # Leave headroom above messages.memory_budget_bytes.
+    memory: 512Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+terminationGracePeriodSeconds: 20
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+  automountServiceAccountToken: false
+
+# Extra environment variables, for keys not covered above
+# (CYPHERA_SECURESEND__SECTION__KEY form).
+extraEnv: []

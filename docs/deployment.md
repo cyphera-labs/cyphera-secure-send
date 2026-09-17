@@ -32,8 +32,17 @@ mounted from `./config`.
 
 ## Kubernetes
 
-Run it as a single-replica Deployment with a `Recreate` strategy, or as a
-StatefulSet with one replica. What matters:
+The Helm chart at [`deploy/helm/securesend`](../deploy/helm/securesend/),
+also published as `oci://ghcr.io/cyphera-labs/charts/securesend`, encodes
+everything below and refuses more than one replica with the memory backend:
+
+```
+helm install securesend oci://ghcr.io/cyphera-labs/charts/securesend \
+  --set config.server.public_base_url=https://send.example.com
+```
+
+Rolling your own instead: a single-replica Deployment with a `Recreate`
+strategy. What matters:
 
 - **Probes.** `GET /livez` and `GET /readyz` on the management port (9090 in
   the image). Readiness turns to 503 the moment shutdown starts.
@@ -74,6 +83,11 @@ because they reveal how much traffic the service carries.
 The public listener's `GET /v1/health` answers only `{"status":"ok"}`.
 
 ## Managed container platforms
+
+Ready-made templates for each, all pinned to one instance:
+[Azure Container Apps](../deploy/azure/) with a Deploy to Azure button,
+[AWS ECS Fargate](../deploy/aws/) as CloudFormation, and
+[Google Cloud Run](../deploy/gcp/) as a scripted deploy.
 
 The same single-process rule applies, and each platform has a default that
 works against it:

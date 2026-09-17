@@ -1,0 +1,215 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "8831628956070928797"
+    }
+  },
+  "parameters": {
+    "name": {
+      "type": "string",
+      "defaultValue": "securesend",
+      "minLength": 3,
+      "maxLength": 20,
+      "metadata": {
+        "description": "Name prefix for the resources."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Region. Defaults to the resource group location."
+      }
+    },
+    "image": {
+      "type": "string",
+      "defaultValue": "ghcr.io/cyphera-labs/cyphera-secure-send:latest",
+      "metadata": {
+        "description": "Container image. Pin a version tag in production."
+      }
+    },
+    "companyName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Company name shown in the interface."
+      }
+    },
+    "primaryColor": {
+      "type": "string",
+      "defaultValue": "#1f4e79",
+      "metadata": {
+        "description": "Primary brand color, #rgb or #rrggbb."
+      }
+    },
+    "authMode": {
+      "type": "string",
+      "defaultValue": "anonymous",
+      "allowedValues": [
+        "anonymous",
+        "oidc"
+      ],
+      "metadata": {
+        "description": "anonymous: anyone with the link and the password. oidc: sign-in required, recipient binding on."
+      }
+    },
+    "oidcIssuer": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "OIDC issuer. For Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0"
+      }
+    },
+    "oidcClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "OIDC client (application) id."
+      }
+    },
+    "oidcClientSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "OIDC client secret. Stored as a Container Apps secret."
+      }
+    },
+    "allowedDomains": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Comma-separated list of allowed email domains, e.g. example.com. Empty allows any."
+      }
+    },
+    "defaultTtlSeconds": {
+      "type": "int",
+      "defaultValue": 3600,
+      "allowedValues": [
+        300,
+        900,
+        3600,
+        28800,
+        86400
+      ],
+      "metadata": {
+        "description": "Default message lifetime in seconds. Must be one of 300, 900, 3600, 28800, 86400."
+      }
+    },
+    "memoryBudgetBytes": {
+      "type": "int",
+      "defaultValue": 134217728,
+      "metadata": {
+        "description": "Memory budget for pending messages, in bytes."
+      }
+    }
+  },
+  "variables": {
+    "envName": "[format('{0}-env', parameters('name'))]",
+    "appName": "[format('{0}-app', parameters('name'))]",
+    "logName": "[format('{0}-logs', parameters('name'))]",
+    "oidcEnabled": "[equals(parameters('authMode'), 'oidc')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('logName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('envName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2023-09-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2023-09-01').primarySharedKey]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('appName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('envName'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "http",
+            "allowInsecure": false
+          },
+          "secrets": "[if(variables('oidcEnabled'), createArray(createObject('name', 'oidc-client-secret', 'value', parameters('oidcClientSecret'))), createArray())]"
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "securesend",
+              "image": "[parameters('image')]",
+              "resources": {
+                "cpu": "[json('0.5')]",
+                "memory": "1Gi"
+              },
+              "env": "[concat(createArray(createObject('name', 'CYPHERA_SECURESEND__SERVER__PUBLIC_BASE_URL', 'value', format('https://{0}.{1}', variables('appName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('envName')), '2024-03-01').defaultDomain)), createObject('name', 'CYPHERA_SECURESEND__SERVER__HSTS', 'value', 'true'), createObject('name', 'CYPHERA_SECURESEND__SERVER__MANAGEMENT_BIND', 'value', '0.0.0.0:9090'), createObject('name', 'CYPHERA_SECURESEND__SERVER__TRUSTED_PROXIES', 'value', '10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16'), createObject('name', 'CYPHERA_SECURESEND__MESSAGES__DEFAULT_TTL_SECONDS', 'value', string(parameters('defaultTtlSeconds'))), createObject('name', 'CYPHERA_SECURESEND__MESSAGES__MEMORY_BUDGET_BYTES', 'value', string(parameters('memoryBudgetBytes'))), createObject('name', 'CYPHERA_SECURESEND__BRANDING__COMPANY_NAME', 'value', parameters('companyName')), createObject('name', 'CYPHERA_SECURESEND__BRANDING__COLORS__PRIMARY', 'value', parameters('primaryColor')), createObject('name', 'CYPHERA_SECURESEND__AUTH__MODE', 'value', parameters('authMode'))), if(variables('oidcEnabled'), createArray(createObject('name', 'CYPHERA_SECURESEND__AUTH__OIDC__ISSUER', 'value', parameters('oidcIssuer')), createObject('name', 'CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_ID', 'value', parameters('oidcClientId')), createObject('name', 'CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET', 'secretRef', 'oidc-client-secret'), createObject('name', 'CYPHERA_SECURESEND__AUTH__OIDC__ALLOWED_DOMAINS', 'value', parameters('allowedDomains'))), createArray()))]",
+              "probes": [
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 9090
+                  },
+                  "periodSeconds": 10
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 9090
+                  },
+                  "periodSeconds": 5
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('envName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "url": {
+      "type": "string",
+      "value": "[format('https://{0}.{1}', variables('appName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('envName')), '2024-03-01').defaultDomain)]"
+    },
+    "oidcRedirectUri": {
+      "type": "string",
+      "value": "[format('{0}/auth/callback', format('https://{0}.{1}', variables('appName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('envName')), '2024-03-01').defaultDomain))]"
+    }
+  }
+}

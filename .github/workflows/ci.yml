@@ -167,6 +167,42 @@ jobs:
           tags: cyphera-secure-send:ci
       - run: docker run --rm cyphera-secure-send:ci check-config
 
+  deploy-templates:
+    name: Deploy templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Helm chart lints, renders, and its guards fire
+        run: |
+          helm lint deploy/helm/securesend
+          helm template securesend deploy/helm/securesend > /dev/null
+          helm template securesend deploy/helm/securesend \
+            --set config.server.public_base_url=https://send.example.com \
+            --set config.auth.mode=oidc --set config.auth.oidc.issuer=https://idp.example/ \
+            --set config.auth.oidc.client_id=app --set oidc.clientSecret=x \
+            --set ingress.enabled=true --set management.service.enabled=true \
+            --set management.serviceMonitor.enabled=true > /dev/null
+          if helm template securesend deploy/helm/securesend --set replicaCount=2 > /dev/null 2>&1; then
+            echo "the memory-backend replica guard did not fire" >&2; exit 1
+          fi
+      - name: Bicep compiles and the committed ARM template is current
+        run: |
+          az bicep install
+          az bicep build --file deploy/azure/main.bicep --outfile "${RUNNER_TEMP}/azuredeploy.json"
+          python3 - <<'PY'
+          import json, os
+          committed = json.load(open("deploy/azure/azuredeploy.json"))
+          built = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "azuredeploy.json")))
+          for d in (committed, built):
+              d.get("metadata", {}).pop("_generator", None)
+          if committed != built:
+              raise SystemExit("deploy/azure/azuredeploy.json is out of date; run: bicep build main.bicep --outfile azuredeploy.json")
+          PY
+      - name: CloudFormation template lints
+        run: |
+          pip install --quiet cfn-lint==1.56.3
+          cfn-lint deploy/aws/securesend-standalone.yaml
+
   sonar:
     name: SonarQube
     runs-on: ubuntu-latest
