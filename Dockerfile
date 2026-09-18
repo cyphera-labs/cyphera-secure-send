@@ -1,7 +1,7 @@
 # Build the interface, build the service, ship only the binary.
 # Runtime image has no shell and no package manager; the process runs as nonroot.
 
-FROM cgr.dev/chainguard/wolfi-base@sha256:65e1acb87a2bf356b92c5f70f3980f03b4bb51dfd483c834e01557525f15c1d9 AS web
+FROM cgr.dev/chainguard/wolfi-base@sha256:1d95114038f76513a9ace6fca107d5582b08c65981f81f61cb56bf7fd2ef216d AS web
 RUN apk add --no-cache nodejs npm && rm -rf /var/cache/apk/*
 USER nonroot
 WORKDIR /home/nonroot/web
@@ -10,7 +10,7 @@ RUN npm ci --no-audit --no-fund
 COPY --chown=nonroot:nonroot web/ ./
 RUN npm run build
 
-FROM cgr.dev/chainguard/wolfi-base@sha256:65e1acb87a2bf356b92c5f70f3980f03b4bb51dfd483c834e01557525f15c1d9 AS build
+FROM cgr.dev/chainguard/wolfi-base@sha256:1d95114038f76513a9ace6fca107d5582b08c65981f81f61cb56bf7fd2ef216d AS build
 RUN apk add --no-cache rust-1.97 build-base && rm -rf /var/cache/apk/*
 USER nonroot
 WORKDIR /home/nonroot/src
