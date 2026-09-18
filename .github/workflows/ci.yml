@@ -22,7 +22,7 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci --no-audit --no-fund
+      - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: web
       - run: npm run typecheck
         working-directory: web
@@ -146,9 +146,10 @@ jobs:
           name: binary
           path: target/debug
       - run: chmod +x target/debug/cyphera-secure-send
-      - run: npm ci --no-audit --no-fund
+      - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: web
-      - run: npx playwright install --with-deps chromium
+      # The local binary from the lockfile, never an on-demand fetch.
+      - run: ./node_modules/.bin/playwright install --with-deps chromium
         working-directory: web
       - run: npm run e2e
         working-directory: web
@@ -200,7 +201,7 @@ jobs:
           PY
       - name: CloudFormation template lints
         run: |
-          pip install --quiet cfn-lint==1.56.3
+          pip install --quiet --only-binary :all: cfn-lint==1.56.3
           cfn-lint deploy/aws/securesend-standalone.yaml
 
   sonar:
