@@ -20,8 +20,14 @@ function encode(bytes: Bytes, alphabet: string): string {
   return out;
 }
 
+function stripPadding(text: string): string {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "=") end--;
+  return text.slice(0, end);
+}
+
 function decode(text: string, alphabet: string): Bytes {
-  const clean = text.replace(/=+$/, "");
+  const clean = stripPadding(text);
   const lookup = new Map<string, number>();
   for (let i = 0; i < alphabet.length; i++) lookup.set(alphabet[i]!, i);
   const out: number[] = [];

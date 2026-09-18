@@ -26,8 +26,8 @@ describe("seal and open", () => {
     expect(sealed.envelope.version).toBe(1);
     expect(sealed.envelope.kdf.name).toBe("PBKDF2-SHA256");
     expect(sealed.envelope.cipher.name).toBe("AES-256-GCM");
-    expect(base64url.decode(sealed.verifier).length).toBe(32);
-    expect(base64url.decode(sealed.linkSecret).length).toBe(32);
+    expect(base64url.decode(sealed.verifier)).toHaveLength(32);
+    expect(base64url.decode(sealed.linkSecret)).toHaveLength(32);
     const plain = await open(sealed.envelope, "correct horse", sealed.linkSecret);
     expect(plain).toBe("hunter2 is not a password");
   });

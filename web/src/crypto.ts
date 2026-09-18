@@ -171,7 +171,7 @@ export function decodeFragment(fragment: string): LinkParams | null {
   if (!/^[A-Za-z0-9_-]{43}$/.test(linkSecret)) return null;
   if (!/^[A-Za-z0-9_-]{22}$/.test(salt)) return null;
   if (!/^[0-9a-z]{1,8}$/.test(iter)) return null;
-  const iterations = parseInt(iter, 36);
+  const iterations = Number.parseInt(iter, 36);
   if (!Number.isSafeInteger(iterations) || iterations <= 0) return null;
   return { linkSecret, salt: base64.encode(base64url.decode(salt)), iterations };
 }

@@ -184,7 +184,7 @@ function compose(): void {
     h("p", { class: "lede" }, config.tagline),
     field("Your email", sender),
     field("Recipient email", recipient),
-    field("Message", message, undefined),
+    field("Message", message),
     counter,
     h("div", { class: "field" },
       h("span", { class: "field-label" }, "Password"),
@@ -453,4 +453,4 @@ async function boot(): Promise<void> {
   route();
 }
 
-void boot();
+await boot();

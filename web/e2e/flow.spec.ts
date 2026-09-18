@@ -125,7 +125,7 @@ test("two simultaneous reveals deliver exactly once", async ({ page, browser }) 
   await Promise.all([a.waitForTimeout(500), b.waitForTimeout(500)]);
   const aFinal = await a.getByLabel("Message").isVisible().catch(() => false);
   const bFinal = await b.getByLabel("Message").isVisible().catch(() => false);
-  expect([aWon || aFinal, bWon || bFinal].filter(Boolean).length).toBe(1);
+  expect([aWon || aFinal, bWon || bFinal].filter(Boolean)).toHaveLength(1);
 });
 
 test("a link without its fragment is refused", async ({ page }) => {

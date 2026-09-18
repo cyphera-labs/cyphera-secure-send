@@ -1,22 +1,30 @@
 type Child = Node | string | null | undefined | false;
 
+type Attr = string | boolean | ((e: Event) => void);
+
+function applyAttr(el: Element, key: string, value: Attr): void {
+  if (typeof value === "function") {
+    el.addEventListener(key.startsWith("on") ? key.slice(2).toLowerCase() : key, value);
+    return;
+  }
+  if (typeof value === "boolean") {
+    if (value) el.setAttribute(key, "");
+    return;
+  }
+  if (key === "class") {
+    el.className = value;
+    return;
+  }
+  el.setAttribute(key, value);
+}
+
 export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
-  attrs: Record<string, string | boolean | ((e: Event) => void)> = {},
+  attrs: Record<string, Attr> = {},
   ...children: Child[]
 ): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (typeof value === "function") {
-      el.addEventListener(key.startsWith("on") ? key.slice(2).toLowerCase() : key, value);
-    } else if (typeof value === "boolean") {
-      if (value) el.setAttribute(key, "");
-    } else if (key === "class") {
-      el.className = value;
-    } else {
-      el.setAttribute(key, value);
-    }
-  }
+  for (const [key, value] of Object.entries(attrs)) applyAttr(el, key, value);
   for (const child of children) {
     if (child === null || child === undefined || child === false) continue;
     el.append(typeof child === "string" ? document.createTextNode(child) : child);
@@ -25,7 +33,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 }
 
 export function clear(el: Element): void {
-  while (el.firstChild) el.removeChild(el.firstChild);
+  while (el.firstChild) el.firstChild.remove();
 }
 
 export function formatDuration(seconds: number): string {
