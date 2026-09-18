@@ -4,8 +4,6 @@
 [![security](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/security.yml/badge.svg)](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/security.yml)
 [![codeql](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/codeql.yml/badge.svg)](https://github.com/cyphera-labs/cyphera-secure-send/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cyphera-labs/cyphera-secure-send/badge)](https://scorecard.dev/viewer/?uri=github.com/cyphera-labs/cyphera-secure-send)
-[![Quality gate](https://sonarcloud.io/api/project_badges/measure?project=cyphera-labs_cyphera-secure-send&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=cyphera-labs_cyphera-secure-send)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=cyphera-labs_cyphera-secure-send&metric=coverage)](https://sonarcloud.io/summary/new_code?id=cyphera-labs_cyphera-secure-send)
 [![Release](https://img.shields.io/github/v/release/cyphera-labs/cyphera-secure-send?include_prereleases&sort=semver)](https://github.com/cyphera-labs/cyphera-secure-send/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](Cargo.toml)
