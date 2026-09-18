@@ -26,9 +26,10 @@ storage:
 # see `oidc.clientSecret` and `existingSecret`.
 config:
   server:
-    # Set to the URL users reach the service at; required in OIDC mode and
-    # used to decide whether cookies are marked Secure.
-    public_base_url: ""
+    # The URL users reach the service at. Required in enterprise mode, and
+    # what decides whether cookies are marked Secure. Leave null when there
+    # is none.
+    public_base_url: null
     hsts: true
     # Pod networks and the ingress controller. X-Forwarded-For is honored
     # only from these ranges.

@@ -24,6 +24,9 @@ export interface UiConfig {
   kdf_iterations: number;
   max_failed_proofs: number;
   mode: "standard" | "enterprise";
+  creation_requires_sign_in: boolean;
+  consumption_requires_sign_in: boolean;
+  recipient_must_match: boolean;
   version: string;
 }
 

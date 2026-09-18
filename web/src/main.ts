@@ -8,8 +8,15 @@ let config: UiConfig;
 let session: SessionView = { authenticated: false };
 const FRAGMENT_KEY = "securesend.fragment";
 
-function needsSignIn(): boolean {
-  return config.mode === "enterprise" && !session.authenticated;
+/// Creating and reading are separate questions: a deployment can require a
+/// signed-in sender while letting a customer outside the directory read with
+/// the link and the password.
+function needsSignInToCreate(): boolean {
+  return config.creation_requires_sign_in && !session.authenticated;
+}
+
+function needsSignInToRead(): boolean {
+  return config.consumption_requires_sign_in && !session.authenticated;
 }
 
 /** Sends the browser to the provider. The fragment never reaches the server,
@@ -139,7 +146,7 @@ function describeError(e: unknown, fallback: string): string {
 // ---------------------------------------------------------------- compose
 
 function compose(): void {
-  if (needsSignIn()) {
+  if (needsSignInToCreate()) {
     signInCard(config.product_name, "Sign in to send a secure message.", "/");
     return;
   }
@@ -311,8 +318,11 @@ function unavailable(): void {
 }
 
 function reveal(id: string): void {
-  if (needsSignIn()) {
-    signInCard("You have a secure message", "Sign in to read it. The message can be viewed only once, by the person it was sent to.", `/m/${id}`);
+  if (needsSignInToRead()) {
+    const why = config.recipient_must_match
+      ? "Sign in to read it. It can be viewed only once, by the person it was sent to."
+      : "Sign in to read it. It can be viewed only once.";
+    signInCard("You have a secure message", why, `/m/${id}`);
     return;
   }
   const params = decodeFragment(location.hash);

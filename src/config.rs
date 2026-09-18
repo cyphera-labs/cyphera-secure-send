@@ -225,10 +225,16 @@ pub struct OidcSettings {
     pub client_secret: Option<String>,
     pub client_secret_file: Option<PathBuf>,
     pub scopes: Vec<String>,
-    /// The claim that carries the user's email. Entra ID work accounts
-    /// populate `email` when the `email` scope is requested; `preferred_username`
-    /// is the fallback when the first is absent.
+    /// Which claim carries the address. There is no fallback between them:
+    /// they mean different things, and quietly substituting one for the other
+    /// would let a provider that does not verify usernames decide who counts
+    /// as an employee.
     pub email_claim: EmailClaim,
+    /// What to do when the token does not say the address has been verified.
+    /// Signing in proves control of an account, not of every address attached
+    /// to it, so this is a deliberate statement about what the provider
+    /// guarantees rather than a default anyone should inherit silently.
+    pub unverified_email: UnverifiedEmail,
     pub session_ttl_seconds: u64,
     /// How long a started login may take before it is forgotten.
     pub login_ttl_seconds: u64,
@@ -240,8 +246,24 @@ pub struct OidcSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmailClaim {
+    /// The `email` claim, which carries `email_verified` alongside it.
     Email,
+    /// The `preferred_username` claim. It has no companion verification and
+    /// providers describe it as mutable, so choosing it is a statement that
+    /// your provider controls what it contains.
     PreferredUsername,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnverifiedEmail {
+    /// Refuse the sign-in unless the token says the address is verified.
+    Refuse,
+    /// Accept it. Choose this when the provider is authoritative for the
+    /// address even though it does not send `email_verified`, which is common
+    /// for a single-tenant directory. It is a statement about your provider,
+    /// not a convenience setting.
+    Accept,
 }
 
 impl Default for OidcSettings {
@@ -257,6 +279,7 @@ impl Default for OidcSettings {
                 "email".to_owned(),
             ],
             email_claim: EmailClaim::Email,
+            unverified_email: UnverifiedEmail::Refuse,
             session_ttl_seconds: 8 * 3600,
             login_ttl_seconds: 600,
             trust_ca_path: None,
@@ -417,12 +440,43 @@ impl Settings {
                 .try_parsing(true)
                 .list_separator(",")
                 .with_list_parse_key("messages.ttl_options_seconds")
-                .with_list_parse_key("server.trusted_proxies"),
+                .with_list_parse_key("server.trusted_proxies")
+                .with_list_parse_key("enterprise.creation.allowed_domains")
+                .with_list_parse_key("enterprise.oidc.scopes"),
         );
 
-        let settings: Settings = builder.build()?.try_deserialize()?;
+        let mut settings: Settings = builder.build()?.try_deserialize()?;
+        settings.normalize();
         settings.validate()?;
         Ok(settings)
+    }
+
+    /// Tidies what an operator can reasonably write. A list supplied through
+    /// the environment arrives as one string split on commas, so an unset
+    /// variable that is still present, `KEY=`, becomes a single empty entry
+    /// rather than an empty list; the templates would then fail to start over
+    /// a value the operator did not set.
+    fn normalize(&mut self) {
+        fn tidy(list: &mut Vec<String>) {
+            for item in list.iter_mut() {
+                *item = item.trim().to_owned();
+            }
+            list.retain(|item| !item.is_empty());
+        }
+        tidy(&mut self.enterprise.creation.allowed_domains);
+        tidy(&mut self.enterprise.oidc.scopes);
+        if self.enterprise.oidc.scopes.is_empty() {
+            self.enterprise.oidc.scopes = OidcSettings::default().scopes;
+        }
+        if self
+            .server
+            .public_base_url
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(str::is_empty)
+        {
+            self.server.public_base_url = None;
+        }
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -675,6 +729,21 @@ mod tests {
     #[test]
     fn defaults_validate() {
         Settings::default().validate().unwrap();
+    }
+
+    #[test]
+    fn an_unset_list_variable_is_not_a_one_entry_list() {
+        let mut s = Settings {
+            mode: Mode::Enterprise,
+            ..Default::default()
+        };
+        s.server.public_base_url = Some("   ".into());
+        s.enterprise.creation.allowed_domains = vec!["".into(), " example.com ".into()];
+        s.enterprise.oidc.scopes = vec!["".into()];
+        s.normalize();
+        assert_eq!(s.server.public_base_url, None);
+        assert_eq!(s.enterprise.creation.allowed_domains, vec!["example.com"]);
+        assert!(s.enterprise.oidc.scopes.iter().any(|x| x == "openid"));
     }
 
     #[test]

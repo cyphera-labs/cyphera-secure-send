@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 
 use cyphera_secure_send::api::public_router;
 use cyphera_secure_send::audit::{MemorySink, Reason};
-use cyphera_secure_send::config::{Mode, Settings};
+use cyphera_secure_send::config::{EmailClaim, Mode, Settings, UnverifiedEmail};
+use cyphera_secure_send::domain::MessageId;
 
 // ------------------------------------------------------------ fake provider
 
@@ -35,6 +36,9 @@ struct Idp {
     jwk_e: String,
     /// The user the next login will produce.
     next_email: Mutex<String>,
+    /// What the next token says about that address: Some(true), Some(false),
+    /// or None for a token that omits the claim entirely.
+    next_email_verified: Mutex<Option<bool>>,
     /// code -> (nonce, code_challenge)
     codes: Mutex<HashMap<String, (String, String)>>,
     token_calls: Mutex<u32>,
@@ -148,7 +152,8 @@ async fn token(
     let _ = f.redirect_uri;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let email = idp.next_email.lock().unwrap().clone();
-    let claims = json!({
+    let verified = *idp.next_email_verified.lock().unwrap();
+    let mut claims = json!({
         "iss": idp.issuer,
         "sub": format!("sub-{}", email),
         "aud": idp.client_id,
@@ -158,6 +163,12 @@ async fn token(
         "email": email,
         "preferred_username": email,
     });
+    match verified {
+        Some(v) => claims["email_verified"] = json!(v),
+        None => {
+            claims.as_object_mut().unwrap().remove("email_verified");
+        }
+    }
     let mut header = Header::new(Algorithm::RS256);
     header.kid = Some("test-1".into());
     let id_token = jsonwebtoken::encode(&header, &claims, &idp.signing_key).unwrap();
@@ -177,6 +188,7 @@ async fn start_idp() -> Arc<Idp> {
         jwk_n: BASE64URL_NOPAD.encode(&key.n().to_bytes_be()),
         jwk_e: BASE64URL_NOPAD.encode(&key.e().to_bytes_be()),
         next_email: Mutex::new("bob@acme.com".into()),
+        next_email_verified: Mutex::new(Some(true)),
         codes: Mutex::new(HashMap::new()),
         token_calls: Mutex::new(0),
     });
@@ -234,6 +246,7 @@ fn client() -> reqwest::Client {
 /// the final redirect target.
 async fn sign_in(app: &App, idp: &Idp, c: &reqwest::Client, email: &str, next: &str) -> String {
     *idp.next_email.lock().unwrap() = email.to_owned();
+    *idp.next_email_verified.lock().unwrap() = Some(true);
     let r = c
         .get(format!("{}/auth/login?next={}", app.base, next))
         .send()
@@ -298,15 +311,11 @@ async fn login_establishes_a_session_bound_to_the_browser() {
         json!({"authenticated": false})
     );
 
-    let landed = sign_in(
-        &app,
-        &idp,
-        &c,
-        "bob@acme.com",
-        "/m/abcdefghijklmnopqrstuvwxyz",
-    )
-    .await;
-    assert_eq!(landed, "/m/abcdefghijklmnopqrstuvwxyz");
+    // A real message identifier: the callback only returns the browser to a
+    // page this service actually serves.
+    let target = MessageId::generate().unwrap().to_string();
+    let landed = sign_in(&app, &idp, &c, "bob@acme.com", &format!("/m/{target}")).await;
+    assert_eq!(landed, format!("/m/{target}"));
 
     let v: Value = c
         .get(format!("{}/v1/session", app.base))
@@ -606,6 +615,111 @@ async fn an_authenticated_employee_can_hand_a_secret_to_an_outside_customer() {
         .unwrap();
     assert_eq!(created.sender.as_deref(), Some("alice@acme.com"));
     assert_eq!(created.subject.as_deref(), Some("sub-alice@acme.com"));
+}
+
+/// Signing in proves control of an account. It does not prove control of
+/// every address attached to that account, and authorization rests on the
+/// address, so a token that says the address is unverified must not produce
+/// a session.
+#[tokio::test]
+async fn an_address_the_provider_has_not_verified_cannot_sign_in() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |_| {}).await;
+
+    for claim in [Some(false), None] {
+        let c = client();
+        *idp.next_email.lock().unwrap() = "forged@acme.com".to_owned();
+        *idp.next_email_verified.lock().unwrap() = claim;
+        let r = c
+            .get(format!("{}/auth/login?next=/", app.base))
+            .send()
+            .await
+            .unwrap();
+        let to_idp = r.headers()["location"].to_str().unwrap().to_owned();
+        let r = c.get(&to_idp).send().await.unwrap();
+        let back = r.headers()["location"].to_str().unwrap().to_owned();
+        let r = c.get(&back).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "claim {claim:?}");
+
+        let v: Value = c
+            .get(format!("{}/v1/session", app.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(v["authenticated"], false, "claim {claim:?}");
+    }
+    assert!(
+        app.audit
+            .events()
+            .iter()
+            .any(|e| e.event_type == "auth.login_failed")
+    );
+}
+
+/// A directory that is authoritative for its addresses but does not send the
+/// verification claim is a real and common shape. It works only when the
+/// operator says so.
+#[tokio::test]
+async fn a_deployment_can_accept_an_unverified_address_deliberately() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |s| {
+        s.enterprise.oidc.unverified_email = UnverifiedEmail::Accept;
+    })
+    .await;
+    let c = client();
+    *idp.next_email.lock().unwrap() = "alice@acme.com".to_owned();
+    *idp.next_email_verified.lock().unwrap() = None;
+    let r = c
+        .get(format!("{}/auth/login?next=/", app.base))
+        .send()
+        .await
+        .unwrap();
+    let to_idp = r.headers()["location"].to_str().unwrap().to_owned();
+    let r = c.get(&to_idp).send().await.unwrap();
+    let back = r.headers()["location"].to_str().unwrap().to_owned();
+    let r = c.get(&back).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+
+    // Even then, a claim that explicitly says unverified is still refused.
+    let c2 = client();
+    *idp.next_email_verified.lock().unwrap() = Some(false);
+    let r = c2
+        .get(format!("{}/auth/login?next=/", app.base))
+        .send()
+        .await
+        .unwrap();
+    let to_idp = r.headers()["location"].to_str().unwrap().to_owned();
+    let r = c2.get(&to_idp).send().await.unwrap();
+    let back = r.headers()["location"].to_str().unwrap().to_owned();
+    assert_eq!(
+        c2.get(&back).send().await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+/// The configured claim is the only one consulted; a provider that omits it
+/// cannot have another claim quietly substituted.
+#[tokio::test]
+async fn the_configured_claim_is_not_silently_swapped_for_another() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |s| {
+        s.enterprise.oidc.email_claim = EmailClaim::PreferredUsername;
+    })
+    .await;
+    let c = client();
+    sign_in(&app, &idp, &c, "alice@acme.com", "/").await;
+    let v: Value = c
+        .get(format!("{}/v1/session", app.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["email"], "alice@acme.com");
 }
 
 #[tokio::test]

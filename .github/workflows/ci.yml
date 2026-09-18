@@ -182,21 +182,25 @@ jobs:
   deploy-templates:
     name: Deploy templates
     runs-on: ubuntu-latest
+    needs: build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Helm chart lints, renders, and its guards fire
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binary
+          path: bin
+      - run: chmod +x bin/cyphera-secure-send
+      - name: Helm chart lints and its guards fire
         run: |
           helm lint deploy/helm/securesend
-          helm template securesend deploy/helm/securesend > /dev/null
-          helm template securesend deploy/helm/securesend \
-            --set config.server.public_base_url=https://send.example.com \
-            --set mode=enterprise --set config.auth.oidc.issuer=https://idp.example/ \
-            --set config.auth.oidc.client_id=app --set oidc.clientSecret=x \
-            --set ingress.enabled=true --set management.service.enabled=true \
-            --set management.serviceMonitor.enabled=true > /dev/null
           if helm template securesend deploy/helm/securesend --set replicaCount=2 > /dev/null 2>&1; then
             echo "the memory-backend replica guard did not fire" >&2; exit 1
           fi
+          if helm template securesend deploy/helm/securesend --set mode=enterprise > /dev/null 2>&1; then
+            echo "the enterprise guard did not fire without a public base url" >&2; exit 1
+          fi
+      - name: Everything the templates generate is configuration the service accepts
+        run: ./deploy/check-recipes.sh "$PWD/bin/cyphera-secure-send"
       - name: Bicep compiles and the committed ARM template is current
         run: |
           az bicep install

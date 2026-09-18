@@ -62,6 +62,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.branding.faviconFile -}}{{- $_ := set $b "favicon_path" (printf "/branding/%s" .Values.branding.faviconFile) -}}{{- end -}}
 {{- end -}}
 {{- $server := index $cfg "server" -}}
+{{/* An empty string is not a URL; drop the key so the service sees no value. */}}
+{{- if not (index $server "public_base_url") -}}
+{{- $_ := unset $server "public_base_url" -}}
+{{- end -}}
 {{- $_ := set $server "bind" "0.0.0.0:8080" -}}
 {{- $_ := set $server "management_bind" (printf "0.0.0.0:%d" (int .Values.management.port)) -}}
 {{- toYaml $cfg -}}

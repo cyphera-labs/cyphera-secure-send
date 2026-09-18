@@ -114,6 +114,13 @@ pub struct UiConfig {
     pub kdf_iterations: u32,
     pub max_failed_proofs: u32,
     pub mode: crate::config::Mode,
+    /// What the interface must ask of a visitor. Derived from the access
+    /// rules rather than from the mode, because enterprise mode answers "who
+    /// may create" and "what must the reader prove" separately. These are
+    /// statements about what to show; the server enforces regardless.
+    pub creation_requires_sign_in: bool,
+    pub consumption_requires_sign_in: bool,
+    pub recipient_must_match: bool,
     pub version: &'static str,
 }
 
@@ -136,6 +143,13 @@ pub async fn ui_config(State(state): State<SharedState>) -> Json<UiConfig> {
         kdf_iterations: s.messages.kdf.recommended_iterations,
         max_failed_proofs: s.messages.max_failed_proofs,
         mode: s.mode,
+        creation_requires_sign_in: s.mode == crate::config::Mode::Enterprise
+            && s.enterprise.creation.require_oidc,
+        consumption_requires_sign_in: s.mode == crate::config::Mode::Enterprise
+            && s.enterprise.recipient.require_oidc,
+        recipient_must_match: s.mode == crate::config::Mode::Enterprise
+            && s.enterprise.recipient.require_oidc
+            && s.enterprise.recipient.require_identity_match,
         version: env!("CARGO_PKG_VERSION"),
     })
 }

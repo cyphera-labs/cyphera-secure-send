@@ -12,8 +12,8 @@ use std::time::Duration;
 use url::Url;
 
 use super::session::{CookieSpec, MemorySessionStore, PendingLogin, Session, SessionStore};
-use crate::config::{EmailClaim, OidcSettings};
-use crate::domain::Email;
+use crate::config::{EmailClaim, OidcSettings, UnverifiedEmail};
+use crate::domain::{Email, MessageId};
 use std::sync::Arc;
 
 type Client = CoreClient<
@@ -43,6 +43,8 @@ pub enum OidcError {
     IdToken(String),
     #[error("the ID token carries no usable email claim")]
     NoEmail,
+    #[error("the ID token does not say the address has been verified")]
+    UnverifiedEmail,
     #[error("the email claim is not a valid address")]
     BadEmail,
     #[error("session could not be created")]
@@ -55,6 +57,7 @@ pub struct OidcProvider {
     issuer: String,
     scopes: Vec<String>,
     email_claim: EmailClaim,
+    unverified_email: UnverifiedEmail,
     pub sessions: Arc<dyn SessionStore>,
     pub cookies: CookieSpec,
     login_ttl: Duration,
@@ -111,6 +114,7 @@ impl OidcProvider {
             issuer: settings.issuer.clone(),
             scopes: settings.scopes.clone(),
             email_claim: settings.email_claim,
+            unverified_email: settings.unverified_email,
             sessions: Arc::new(MemorySessionStore::new(
                 Duration::from_secs(settings.session_ttl_seconds),
                 Duration::from_secs(settings.login_ttl_seconds),
@@ -191,15 +195,23 @@ impl OidcProvider {
             .map_err(|e| OidcError::IdToken(e.to_string()))?;
         let _ = token.access_token();
 
+        // The configured claim, and only it. The account is identified by
+        // issuer and subject; the address is a separate assertion about that
+        // account, and authorization rests on it, so it is taken from the one
+        // place the operator nominated.
         let email_raw = match self.email_claim {
-            EmailClaim::Email => claims
-                .email()
-                .map(|e| e.as_str().to_owned())
-                .or_else(|| claims.preferred_username().map(|u| u.as_str().to_owned())),
-            EmailClaim::PreferredUsername => claims
-                .preferred_username()
-                .map(|u| u.as_str().to_owned())
-                .or_else(|| claims.email().map(|e| e.as_str().to_owned())),
+            EmailClaim::Email => {
+                let verified = claims.email_verified();
+                if verified == Some(false)
+                    || (verified.is_none() && self.unverified_email == UnverifiedEmail::Refuse)
+                {
+                    return Err(OidcError::UnverifiedEmail);
+                }
+                claims.email().map(|e| e.as_str().to_owned())
+            }
+            EmailClaim::PreferredUsername => {
+                claims.preferred_username().map(|u| u.as_str().to_owned())
+            }
         }
         .ok_or(OidcError::NoEmail)?;
         let email = Email::parse(&email_raw).map_err(|_| OidcError::BadEmail)?;
@@ -214,20 +226,26 @@ impl OidcProvider {
     }
 }
 
-/// Only same-origin paths are acceptable as a post-login destination.
+/// Where a completed sign-in may send the browser. The service has three
+/// pages, so this accepts those and nothing else rather than trying to judge
+/// an arbitrary string: a check that merely rejects a leading `//` is fooled
+/// by a control character between the slashes, which the browser's URL parser
+/// then strips, turning `/\t/elsewhere.example` into another origin.
 pub fn safe_next(raw: Option<&str>) -> String {
-    match raw {
-        Some(p)
-            if p.starts_with('/')
-                && !p.starts_with("//")
-                && !p.contains('\\')
-                && !p.contains("/\\")
-                && p.len() <= 512 =>
-        {
-            p.to_owned()
-        }
-        _ => "/".to_owned(),
+    const HOME: &str = "/";
+    let Some(candidate) = raw else {
+        return HOME.to_owned();
+    };
+    if candidate == HOME {
+        return HOME.to_owned();
     }
+    let Some((prefix, id)) = candidate.split_at_checked(3) else {
+        return HOME.to_owned();
+    };
+    if (prefix == "/m/" || prefix == "/r/") && MessageId::parse(id).is_ok() {
+        return candidate.to_owned();
+    }
+    HOME.to_owned()
 }
 
 #[cfg(test)]
@@ -235,14 +253,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn next_is_restricted_to_local_paths() {
-        assert_eq!(safe_next(Some("/m/abc")), "/m/abc");
+    fn next_accepts_this_service_and_nothing_else() {
+        let id = MessageId::generate().unwrap().to_string();
+        assert_eq!(safe_next(Some(&format!("/m/{id}"))), format!("/m/{id}"));
+        assert_eq!(safe_next(Some(&format!("/r/{id}"))), format!("/r/{id}"));
         assert_eq!(safe_next(Some("/")), "/");
-        assert_eq!(safe_next(Some("//evil.example")), "/");
-        assert_eq!(safe_next(Some("https://evil.example")), "/");
-        assert_eq!(safe_next(Some("/\\evil.example")), "/");
-        assert_eq!(safe_next(Some("m/abc")), "/");
         assert_eq!(safe_next(None), "/");
-        assert_eq!(safe_next(Some(&"/".repeat(600))), "/");
+    }
+
+    #[test]
+    fn next_refuses_anything_that_could_leave_this_origin() {
+        let id = MessageId::generate().unwrap().to_string();
+        for hostile in [
+            "//evil.example",
+            "/\t/evil.example",
+            "/\n/evil.example",
+            "/\r\n/evil.example",
+            "/ /evil.example",
+            "/\u{0000}/evil.example",
+            "https://evil.example",
+            "http://evil.example",
+            "/\\evil.example",
+            "\\evil.example",
+            "/m/../../evil",
+            &format!("/m/{id}?next=//evil.example"),
+            &format!("/m/{id}#//evil.example"),
+            &format!("/x/{id}"),
+            "/m/short",
+            "m/abc",
+            "",
+        ] {
+            assert_eq!(safe_next(Some(hostile)), "/", "should refuse {hostile:?}");
+        }
     }
 }
