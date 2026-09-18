@@ -55,26 +55,28 @@ pub async fn build_state(
         )),
     };
 
-    let (authorizer, oidc): (Arc<dyn ConsumeAuthorizer>, Option<Arc<OidcProvider>>) =
-        match settings.mode {
-            Mode::Eval => (Arc::new(AnonymousAuthorizer), None),
-            Mode::Enterprise => {
-                let o = &settings.auth.oidc;
-                let base = settings
-                    .server
-                    .public_base_url
-                    .as_deref()
-                    .unwrap_or_default();
-                let provider = OidcProvider::discover(o, base, settings.public_https()).await?;
-                let authorizer = OidcAuthorizer {
-                    allowed_domains: o.allowed_domains.clone(),
-                    require_recipient_match: o.require_recipient_match,
-                    anonymous_create: o.anonymous_create,
-                    anonymous_consume: o.anonymous_consume,
-                };
-                (Arc::new(authorizer), Some(Arc::new(provider)))
-            }
-        };
+    let (authorizer, oidc): (Arc<dyn ConsumeAuthorizer>, Option<Arc<OidcProvider>>) = match settings
+        .mode
+    {
+        Mode::Standard => (Arc::new(AnonymousAuthorizer), None),
+        Mode::Enterprise => {
+            let e = &settings.enterprise;
+            let base = settings
+                .server
+                .public_base_url
+                .as_deref()
+                .unwrap_or_default();
+            let provider = OidcProvider::discover(&e.oidc, base, settings.public_https()).await?;
+            let authorizer = OidcAuthorizer {
+                creation_requires_oidc: e.creation.require_oidc,
+                allowed_domains: e.creation.allowed_domains.clone(),
+                recipient_requires_oidc: e.recipient.require_oidc,
+                require_identity_match: e.recipient.require_identity_match,
+                external_recipients: e.recipient.external_recipients,
+            };
+            (Arc::new(authorizer), Some(Arc::new(provider)))
+        }
+    };
 
     let limits = MessageLimits {
         min_ttl_seconds: settings.messages.min_ttl_seconds,

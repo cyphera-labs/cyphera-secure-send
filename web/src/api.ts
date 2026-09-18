@@ -23,7 +23,7 @@ export interface UiConfig {
   max_plaintext_bytes: number;
   kdf_iterations: number;
   max_failed_proofs: number;
-  mode: "eval" | "enterprise";
+  mode: "standard" | "enterprise";
   version: string;
 }
 

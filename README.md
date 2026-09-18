@@ -114,19 +114,25 @@ threat model: [docs/security-model.md](docs/security-model.md).
 
 ## Two modes
 
-**Eval** (the default): anyone with the link and the password. Sender and
-recipient are typed and not verified; the interface says so. Try it locally
-or deploy an evaluation instance into your own cloud account in minutes, with
-no database and no identity provider.
+**Standard** (the default): possession of the link and the password is the
+authority to retrieve. Sender and recipient are recorded but not verified,
+and the interface says so. Good for an internal network, a VPN, a small team,
+a lab, or handing a credential to a customer.
 
-**Enterprise**: `mode: enterprise`. Users sign in at your identity provider;
-creating requires a session, the sender is the signed-in identity, reading
-requires signing in as the named recipient, and senders and recipients can be
-limited to your domains. Setup for Entra ID and others:
+**Enterprise**: `mode: enterprise`. Users sign in at your identity provider.
+It asks two questions separately: who may create a handoff, and what the
+recipient must prove to consume one. By default both are closed, so only your
+people can create and only the named recipient can read. Relax the second and
+you can hand a secret to a customer who has no account with you, while
+creation stays locked to authenticated staff. Setup for Entra ID and others:
 [docs/identity.md](docs/identity.md).
 
-Eval mode records who users say they are. Enterprise mode verifies who they
-are.
+Standard controls access through possession of the link and the password.
+Enterprise additionally establishes who is allowed to create a handoff and,
+when desired, who is allowed to consume it. Same cryptography in both.
+
+Enterprise mode is free and part of this open-source build; nothing here is
+held back behind a licence.
 
 ## Documentation
 
@@ -154,8 +160,9 @@ are.
 
 ## Supply chain and quality
 
-Every push runs the same gates a release does, and every release ships what a
-security review asks for.
+Every push runs the security and quality gates below. A release additionally
+cross-builds both architectures, signs everything, and publishes the SBOMs,
+the provenance, the image, and the chart.
 
 | | |
 |---|---|

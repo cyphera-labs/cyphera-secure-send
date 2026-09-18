@@ -204,10 +204,10 @@ async fn start_app(idp: &Idp, tweak: impl FnOnce(&mut Settings)) -> App {
     let mut settings = Settings::default();
     settings.server.public_base_url = Some(base.clone());
     settings.mode = Mode::Enterprise;
-    settings.auth.oidc.issuer = idp.issuer.clone();
-    settings.auth.oidc.client_id = idp.client_id.clone();
-    settings.auth.oidc.client_secret = Some(idp.client_secret.clone());
-    settings.auth.oidc.allowed_domains = vec!["acme.com".into()];
+    settings.enterprise.oidc.issuer = idp.issuer.clone();
+    settings.enterprise.oidc.client_id = idp.client_id.clone();
+    settings.enterprise.oidc.client_secret = Some(idp.client_secret.clone());
+    settings.enterprise.creation.allowed_domains = vec!["acme.com".into()];
     settings.messages.kdf.min_iterations = 1;
     settings.rate_limits.consume_per_minute = 200;
     settings.rate_limits.create_per_minute = 200;
@@ -531,6 +531,81 @@ async fn a_user_outside_the_allowed_domains_cannot_create() {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
+}
+
+/// The MSP and helpdesk shape: only authenticated staff may create, and the
+/// customer, who has no account here, reads with the link and the password.
+#[tokio::test]
+async fn an_authenticated_employee_can_hand_a_secret_to_an_outside_customer() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |s| {
+        s.enterprise.recipient.require_oidc = false;
+        s.enterprise.recipient.require_identity_match = false;
+        s.enterprise.recipient.external_recipients = true;
+    })
+    .await;
+    let (proof, verifier) = proof_and_verifier(11);
+
+    // A stranger still cannot create one.
+    let anon = client();
+    let r = anon
+        .post(format!("{}/v1/messages", app.base))
+        .json(&create_body(
+            "nobody@other.com",
+            "cust@other.com",
+            &verifier,
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+
+    // Alice signs in and addresses a customer outside the directory.
+    let alice = client();
+    sign_in(&app, &idp, &alice, "alice@acme.com", "/").await;
+    let r = alice
+        .post(format!("{}/v1/messages", app.base))
+        .json(&create_body("alice@acme.com", "cust@other.com", &verifier))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let id = r.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // The customer reads it once, without an account.
+    let r = anon
+        .post(format!("{}/v1/messages/{id}/consume", app.base))
+        .json(&json!({"proof": proof}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(
+        r.json::<Value>().await.unwrap()["recipient"],
+        "cust@other.com"
+    );
+
+    // And only once.
+    let r = anon
+        .post(format!("{}/v1/messages/{id}/consume", app.base))
+        .json(&json!({"proof": proof}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+
+    // The sender is still the verified identity, and the event says so.
+    let created = app
+        .audit
+        .events()
+        .into_iter()
+        .find(|e| e.event_type == "message.created")
+        .unwrap();
+    assert_eq!(created.sender.as_deref(), Some("alice@acme.com"));
+    assert_eq!(created.subject.as_deref(), Some("sub-alice@acme.com"));
 }
 
 #[tokio::test]

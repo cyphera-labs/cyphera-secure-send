@@ -61,17 +61,31 @@ impl ConsumeAuthorizer for AnonymousAuthorizer {
     }
 }
 
-/// Enterprise mode. Closed unless configured otherwise.
+/// Enterprise mode. Two independent questions: who may create a handoff, and
+/// what the recipient must prove to consume one. Closed on both unless
+/// configured otherwise.
 pub struct OidcAuthorizer {
+    /// Creating requires a signed-in user.
+    pub creation_requires_oidc: bool,
+    /// The organization's own domains. Empty allows any.
     pub allowed_domains: Vec<String>,
-    pub require_recipient_match: bool,
-    pub anonymous_create: bool,
-    pub anonymous_consume: bool,
+    /// Consuming requires a signed-in user.
+    pub recipient_requires_oidc: bool,
+    /// The signed-in reader's address must equal the message's recipient.
+    pub require_identity_match: bool,
+    /// A recipient outside `allowed_domains` is acceptable.
+    pub external_recipients: bool,
 }
 
 impl OidcAuthorizer {
-    fn domain_allowed(&self, email: &Email) -> bool {
+    fn is_internal(&self, email: &Email) -> bool {
         self.allowed_domains.is_empty() || self.allowed_domains.iter().any(|d| d == email.domain())
+    }
+
+    /// May a message be addressed here? Internal always; external only when
+    /// the deployment allows it.
+    fn recipient_allowed(&self, recipient: &Email) -> bool {
+        self.is_internal(recipient) || self.external_recipients
     }
 }
 
@@ -86,19 +100,20 @@ impl ConsumeAuthorizer for OidcAuthorizer {
         sender: &Email,
         recipient: &Email,
     ) -> Decision {
+        if !self.recipient_allowed(recipient) {
+            return Decision::Deny;
+        }
         match &principal.email {
             None => {
-                if self.anonymous_create && self.domain_allowed(recipient) {
-                    Decision::Allow
-                } else {
+                if self.creation_requires_oidc {
                     Decision::Deny
+                } else {
+                    Decision::Allow
                 }
             }
+            // The sender is the signed-in identity, and must be one of ours.
             Some(me) => {
-                if same_address(me, sender)
-                    && self.domain_allowed(sender)
-                    && self.domain_allowed(recipient)
-                {
+                if same_address(me, sender) && self.is_internal(me) {
                     Decision::Allow
                 } else {
                     Decision::Deny
@@ -109,18 +124,18 @@ impl ConsumeAuthorizer for OidcAuthorizer {
 
     fn consume_policy(&self, principal: &RequestPrincipal) -> TakePolicy {
         match &principal.email {
+            // Nobody signed in: acceptable only where reading does not
+            // require it, and then possession of the link and the password is
+            // the whole authority, exactly as in standard mode.
             None => {
-                if self.anonymous_consume {
-                    TakePolicy::allow_any()
-                } else {
+                if self.recipient_requires_oidc {
                     TakePolicy::deny_all()
+                } else {
+                    TakePolicy::allow_any()
                 }
             }
             Some(me) => {
-                if !self.domain_allowed(me) {
-                    return TakePolicy::deny_all();
-                }
-                if self.require_recipient_match {
+                if self.require_identity_match {
                     TakePolicy::only(me.clone())
                 } else {
                     TakePolicy::allow_any()
@@ -146,12 +161,27 @@ mod tests {
         Email::parse(s).unwrap()
     }
 
+    /// The internal-to-internal shape: sign in to send, sign in as the named
+    /// recipient to read, nobody outside the domain.
     fn closed() -> OidcAuthorizer {
         OidcAuthorizer {
+            creation_requires_oidc: true,
             allowed_domains: vec!["acme.com".into()],
-            require_recipient_match: true,
-            anonymous_create: false,
-            anonymous_consume: false,
+            recipient_requires_oidc: true,
+            require_identity_match: true,
+            external_recipients: false,
+        }
+    }
+
+    /// The handoff to a customer: an authenticated employee creates it, and
+    /// the customer presents the link and the password.
+    fn external_handoff() -> OidcAuthorizer {
+        OidcAuthorizer {
+            creation_requires_oidc: true,
+            allowed_domains: vec!["acme.com".into()],
+            recipient_requires_oidc: false,
+            require_identity_match: false,
+            external_recipients: true,
         }
     }
 
@@ -173,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn sender_must_be_the_signed_in_user_and_domains_must_match() {
+    fn the_sender_is_the_signed_in_user_and_must_be_ours() {
         let a = closed();
         assert_eq!(
             a.authorize_create(
@@ -191,6 +221,7 @@ mod tests {
             ),
             Decision::Allow
         );
+        // A typed sender that is not the signed-in user.
         assert_eq!(
             a.authorize_create(
                 &p("alice@acme.com"),
@@ -199,21 +230,32 @@ mod tests {
             ),
             Decision::Deny
         );
+        // Signed in, but not one of ours.
+        assert_eq!(
+            a.authorize_create(&p("eve@other.com"), &e("eve@other.com"), &e("bob@acme.com")),
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn an_outside_recipient_needs_the_deployment_to_allow_it() {
+        let a = closed();
         assert_eq!(
             a.authorize_create(
                 &p("alice@acme.com"),
                 &e("alice@acme.com"),
-                &e("bob@other.com")
+                &e("cust@other.com")
             ),
             Decision::Deny
         );
+        let a = external_handoff();
         assert_eq!(
             a.authorize_create(
-                &p("alice@other.com"),
-                &e("alice@other.com"),
-                &e("bob@acme.com")
+                &p("alice@acme.com"),
+                &e("alice@acme.com"),
+                &e("cust@other.com")
             ),
-            Decision::Deny
+            Decision::Allow
         );
     }
 
@@ -232,50 +274,49 @@ mod tests {
             !a.consume_policy(&p("carol@acme.com"))
                 .permits(&e("bob@acme.com"))
         );
-        let mut open = closed();
-        open.require_recipient_match = false;
+    }
+
+    #[test]
+    fn the_external_handoff_lets_the_customer_read_without_signing_in() {
+        let a = external_handoff();
+        // No session: the link and the password are the whole authority.
         assert!(
-            open.consume_policy(&p("carol@acme.com"))
-                .permits(&e("bob@acme.com"))
+            a.consume_policy(&RequestPrincipal::anonymous())
+                .permits(&e("cust@other.com"))
         );
+        // Signing in anyway does not narrow it, because binding is off.
         assert!(
-            !open
-                .consume_policy(&p("carol@other.com"))
-                .permits(&e("bob@acme.com"))
+            a.consume_policy(&p("alice@acme.com"))
+                .permits(&e("cust@other.com"))
         );
     }
 
     #[test]
-    fn opening_anonymous_paths_is_explicit() {
-        let mut a = closed();
-        a.anonymous_consume = true;
-        assert!(
-            a.consume_policy(&RequestPrincipal::anonymous())
-                .permits(&e("bob@acme.com"))
-        );
-        a.anonymous_create = true;
+    fn creation_can_be_opened_without_opening_consumption() {
+        let a = OidcAuthorizer {
+            creation_requires_oidc: false,
+            ..closed()
+        };
         assert_eq!(
             a.authorize_create(
                 &RequestPrincipal::anonymous(),
-                &e("x@any.com"),
-                &e("bob@acme.com")
+                &e("a@acme.com"),
+                &e("b@acme.com")
             ),
             Decision::Allow
         );
-        assert_eq!(
-            a.authorize_create(
-                &RequestPrincipal::anonymous(),
-                &e("x@any.com"),
-                &e("bob@other.com")
-            ),
-            Decision::Deny
+        assert!(
+            !a.consume_policy(&RequestPrincipal::anonymous())
+                .permits(&e("b@acme.com"))
         );
     }
 
     #[test]
-    fn empty_domain_list_means_any_domain() {
-        let mut a = closed();
-        a.allowed_domains.clear();
+    fn an_empty_domain_list_means_any_domain() {
+        let a = OidcAuthorizer {
+            allowed_domains: Vec::new(),
+            ..closed()
+        };
         assert_eq!(
             a.authorize_create(&p("alice@x.org"), &e("alice@x.org"), &e("bob@y.net")),
             Decision::Allow

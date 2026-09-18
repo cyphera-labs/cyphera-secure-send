@@ -51,7 +51,7 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           env:
             {{- if eq .Values.mode "enterprise" }}
-            - name: CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET
+            - name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ include "securesend.oidcSecretName" . }}

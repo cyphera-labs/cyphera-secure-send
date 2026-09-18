@@ -1,6 +1,6 @@
 # Deploy on Google Cloud
 
-Cloud Run, standalone shape, eval mode by default: exactly one instance, never scaled to zero,
+Cloud Run, standalone shape, standard mode by default: exactly one instance, never scaled to zero,
 messages in its memory.
 
 ```
@@ -31,11 +31,11 @@ proxy. Do not use that setting anywhere the container is reachable directly.
 Enterprise mode: store the client secret in Secret Manager and reference it:
 
 ```
-  --set-secrets "CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET=securesend-oidc-secret:latest" \
+  --set-secrets "CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET=securesend-oidc-secret:latest" \
   --set-env-vars "CYPHERA_SECURESEND__MODE=enterprise,\
-CYPHERA_SECURESEND__AUTH__OIDC__ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0,\
-CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_ID=<application-id>,\
-CYPHERA_SECURESEND__AUTH__OIDC__ALLOWED_DOMAINS=example.com"
+CYPHERA_SECURESEND__ENTERPRISE__OIDC__ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0,\
+CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_ID=<application-id>,\
+CYPHERA_SECURESEND__ENTERPRISE__CREATION__ALLOWED_DOMAINS=example.com"
 ```
 
 `--allow-unauthenticated` refers to Cloud Run's own IAM check on the

@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Cyphera SecureSend, standalone shape on ECS Fargate behind an Application Load
-  Balancer, eval mode by default. Exactly one task; messages live in its memory. Deployments replace
+  Balancer, standard mode by default. Exactly one task; messages live in its memory. Deployments replace
   the task (minimum healthy 0, maximum 100) so two instances never overlap.
 
 Metadata:
@@ -52,9 +52,9 @@ Parameters:
     Default: 134217728
   Mode:
     Type: String
-    Default: eval
-    AllowedValues: [eval, enterprise]
-    Description: eval records who users say they are; enterprise verifies them through your identity provider.
+    Default: standard
+    AllowedValues: [standard, enterprise]
+    Description: standard records who users say they are; enterprise verifies them through your identity provider.
   OidcIssuer:
     Type: String
     Default: ""
@@ -280,15 +280,15 @@ Resources:
               Value: !Ref PrimaryColor
             - Name: CYPHERA_SECURESEND__MODE
               Value: !Ref Mode
-            - Name: CYPHERA_SECURESEND__AUTH__OIDC__ISSUER
+            - Name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__ISSUER
               Value: !Ref OidcIssuer
-            - Name: CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_ID
+            - Name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_ID
               Value: !Ref OidcClientId
-            - Name: CYPHERA_SECURESEND__AUTH__OIDC__ALLOWED_DOMAINS
+            - Name: CYPHERA_SECURESEND__ENTERPRISE__CREATION__ALLOWED_DOMAINS
               Value: !Ref AllowedDomains
           Secrets: !If
             - UseOidc
-            - - Name: CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET
+            - - Name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET
                 ValueFrom: !Ref OidcSecret
             - !Ref AWS::NoValue
           HealthCheck:

@@ -22,11 +22,17 @@ A complete annotated file is at `config/cyphera-secure-send.example.yaml`.
 
 | Value | Meaning |
 |---|---|
-| `eval` (default) | Anyone with the link and the password. Sender and recipient are typed and **not verified**; audit events mark them `asserted`. For trying the product, labs, and cloud evaluation. The interface shows an evaluation banner. |
-| `enterprise` | Users sign in at your identity provider (`auth.oidc`). The sender is the signed-in identity, only the named recipient can read, senders and recipients can be limited to your domains, and audit events mark identities `verified`. Requires `server.public_base_url`. See [identity.md](identity.md). |
+| `standard` (default) | Possession of the link and the password is the authority to retrieve. Sender and recipient are recorded but not verified, the interface says so, and audit events mark identities `asserted`. A supported mode, recommended where reaching the service is itself controlled: an internal network, a VPN, a trusted team. |
+| `enterprise` | Users sign in at your identity provider. Audit events mark identities `verified`. Requires `server.public_base_url`. See [identity.md](identity.md). |
 
-Eval mode records who users say they are. Enterprise mode verifies who they
-are.
+Standard controls access through possession of the link and the password.
+Enterprise additionally establishes who is allowed to create a handoff and,
+when desired, who is allowed to consume it. The cryptography is the same in
+both; what differs is identity assurance.
+
+Enterprise mode is free and part of this open-source build. The Enterprise
+subscription buys supported releases, certified deployments, and security
+response, not features.
 
 ## server
 
@@ -76,25 +82,38 @@ and vanish on restart.
 | `include_client_ip` | `false` | |
 | `include_user_agent` | `false` | truncated to 256 characters |
 
-## auth
+## enterprise
 
-Used in enterprise mode; see [identity.md](identity.md).
+Used when `mode` is `enterprise`; see [identity.md](identity.md) for the
+walkthrough. The provider lives under `enterprise.oidc`, and the two rule
+groups are deliberately separate.
 
 | Key | Default | Notes |
 |---|---|---|
 | `oidc.issuer` | | the provider's issuer URL, as in its discovery document |
 | `oidc.client_id` | | |
-| `oidc.client_secret` | | set as `CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET`; never printed back |
+| `oidc.client_secret` | | set as `CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET`; never printed back |
 | `oidc.client_secret_file` | | alternative: a file containing the secret |
 | `oidc.scopes` | `[openid, profile, email]` | |
 | `oidc.email_claim` | `email` | or `preferred_username`; the other is the fallback |
-| `oidc.allowed_domains` | `[]` | when set, both sender and recipient must belong to one |
-| `oidc.require_recipient_match` | `true` | the reader must be the named recipient |
-| `oidc.anonymous_create` | `false` | |
-| `oidc.anonymous_consume` | `false` | |
 | `oidc.session_ttl_seconds` | `28800` | |
 | `oidc.login_ttl_seconds` | `600` | how long a started login stays valid |
-| `oidc.trust_ca_path` | unset | PEM bundle of extra CAs for reaching the provider |
+| `oidc.trust_ca_path` | unset | PEM bundle of extra authorities for reaching the provider |
+
+**Who may send**
+
+| Key | Default | Notes |
+|---|---|---|
+| `creation.require_oidc` | `true` | creating needs a session, and the sender is that identity rather than a typed field |
+| `creation.allowed_domains` | `[]` | your own domains; the signed-in sender must belong to one. Empty allows any |
+
+**What the recipient must prove**
+
+| Key | Default | Notes |
+|---|---|---|
+| `recipient.require_oidc` | `true` | consuming needs a session |
+| `recipient.require_identity_match` | `true` | the reader's address must equal the message's recipient; needs `require_oidc` |
+| `recipient.external_recipients` | `false` | allow a recipient outside `creation.allowed_domains`; only bites when that list is non-empty |
 
 ## branding
 

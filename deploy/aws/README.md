@@ -1,6 +1,6 @@
 # Deploy on AWS
 
-ECS Fargate behind an Application Load Balancer, standalone shape, eval mode by default: exactly
+ECS Fargate behind an Application Load Balancer, standalone shape, standard mode by default: exactly
 one task, messages in its memory, deployments that replace rather than
 overlap, the management port bound to the task's loopback only.
 

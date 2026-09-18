@@ -130,7 +130,7 @@ Each of these is enforced by a test.
 | Stolen or forged ID token | yes | signature against the provider's keys, issuer, audience, expiry, and nonce all verified; tokens never reach the browser |
 | Reading someone else's message with a valid link and password | yes, in enterprise mode | recipient binding inside the atomic take |
 | Cross-site scripting | yes | no inline script or style, all text set via DOM APIs |
-| Hosting malware or phishing content | partly | text only, small size limit; enterprise mode will close anonymous creation |
+| Hosting malware or phishing content | partly | text only, small size limit; enterprise mode closes anonymous creation by default, so every message is attributable to an authenticated identity an administrator can revoke |
 | Compromised server serving modified JavaScript | **no** | this is the honest limit of browser-side encryption: a malicious server can attack *future* users. Mitigations: signed releases, reproducible interface build, strict CSP, and deploying behind an identity boundary |
 | Compromised endpoint or browser | no | out of scope |
 | A malicious sender | no | the product moves what the sender typed |

@@ -3,11 +3,14 @@
 #   CYPHERA_SECURESEND__<SECTION>__<KEY>, for example
 #   CYPHERA_SECURESEND__BRANDING__COMPANY_NAME=Acme
 
-# eval: anyone with the link and the password; sender and recipient are typed
-#       and not verified. For trying the product, labs, and cloud evaluation.
-# enterprise: users sign in at your identity provider (auth.oidc below); the
-#       sender is the signed-in identity and only the named recipient can read.
-mode: eval
+# standard: possession of the link and the password is the authority to
+#   retrieve. Sender and recipient are recorded but not verified. A supported
+#   mode, recommended where reaching the service is itself controlled, such as
+#   an internal network, a VPN, or a trusted team.
+# enterprise: users sign in at your identity provider. Two independent
+#   questions, set separately below: who may create a handoff, and what the
+#   recipient must prove to consume one.
+mode: standard
 
 server:
   bind: 0.0.0.0:8080
@@ -48,21 +51,26 @@ audit:
   include_client_ip: false
   include_user_agent: false
 
-auth:
-  oidc:                             # used when mode is enterprise
+enterprise:                         # used when mode is enterprise
+  oidc:
     issuer: ""                      # Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0
     client_id: ""
-    # client_secret: set CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET, or:
+    # client_secret: set CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET, or:
     client_secret_file: null
     scopes: [openid, profile, email]
     email_claim: email              # or preferred_username
-    allowed_domains: []             # e.g. [example.com]
-    require_recipient_match: true
-    anonymous_create: false
-    anonymous_consume: false
     session_ttl_seconds: 28800
     login_ttl_seconds: 600
     trust_ca_path: null
+
+  creation:                         # who may SEND
+    require_oidc: true              # off allows anonymous creation; see docs/identity.md
+    allowed_domains: []             # your own domains, e.g. [example.com]. Empty allows any
+
+  recipient:                        # what the recipient must PROVE
+    require_oidc: true              # off: the link and the password are the whole authority
+    require_identity_match: true    # the reader must be the address the message names
+    external_recipients: false      # allow a recipient outside creation.allowed_domains
 
 branding:
   product_name: Cyphera SecureSend

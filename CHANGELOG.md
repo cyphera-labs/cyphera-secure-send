@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 - 2026-09-18
 
-Initial implementation.
+First release.
 
 - Browser-side encryption: PBKDF2-SHA256 and HKDF into AES-256-GCM, with a
   link secret in the URL fragment and a proof-of-password consume.
@@ -17,7 +17,7 @@ Initial implementation.
   support link.
 - Container image on a minimal nonroot base; release workflow with signed
   artifacts, SBOMs, and provenance.
-- Two modes. Eval, the default, with typed and unverified identities and a visible banner. Enterprise: OpenID Connect sign-in with PKCE, state, and nonce;
+- Two modes. Standard, the default, where possession of the link and the password is the authority and addresses are recorded but not verified. Enterprise: OpenID Connect sign-in with PKCE, state, and nonce;
   server-side sessions; the sender is the signed-in identity; recipient
   binding enforced inside the atomic take; allowed domains; closed by default.
   Entra ID documented first, any standards-compliant provider works.

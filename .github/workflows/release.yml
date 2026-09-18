@@ -135,12 +135,16 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    outputs:
+      version: ${{ steps.package.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: helm lint deploy/helm/securesend
       - name: Version the chart from the tag
+        id: package
         run: |
           version="${REF_NAME#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
           helm package deploy/helm/securesend --version "$version" --app-version "$version" --destination out
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -201,7 +205,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             Container: `${{ env.IMAGE }}@${{ needs.container.outputs.digest }}`
-            Helm chart: `oci://ghcr.io/${{ github.repository_owner }}/charts/securesend` version `${{ github.ref_name }}` (tag without the `v`)
+            Helm chart: `oci://ghcr.io/${{ github.repository_owner }}/charts/securesend` version `${{ needs.chart.outputs.version }}`
 
             Binaries and SBOMs are signed with Sigstore; each carries a
             `.sigstore.json` bundle beside it, and a build provenance attestation

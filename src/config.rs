@@ -29,7 +29,7 @@ pub struct Settings {
     pub rate_limits: RateLimitSettings,
     pub storage: StorageSettings,
     pub audit: AuditSettings,
-    pub auth: AuthSettings,
+    pub enterprise: EnterpriseSettings,
     pub branding: BrandingSettings,
 }
 
@@ -141,22 +141,74 @@ pub enum AuditSinkKind {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// Evaluation: anyone with the link and the password. Sender and
-    /// recipient are typed and not verified. For trying the product, labs,
-    /// and cloud evaluation; not for production.
+    /// Capability-based access: possession of the link and the password is
+    /// the authority to retrieve. Sender and recipient addresses are recorded
+    /// but not verified. A supported mode, not a trial; recommended where
+    /// reaching the service is itself controlled, such as an internal
+    /// network, a VPN, or a trusted team.
     #[default]
-    Eval,
-    /// Enterprise: users sign in at an OpenID Connect provider. Closed by
-    /// default: creating and reading both require a session, the sender is
-    /// the signed-in identity, and a message can only be read by the
-    /// recipient it names.
+    Standard,
+    /// Identity-bound access: users sign in at an OpenID Connect provider.
+    /// Two independent questions, configured separately below: who may create
+    /// a handoff, and what the recipient must prove to consume one.
     Enterprise,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct AuthSettings {
+pub struct EnterpriseSettings {
+    /// The identity provider.
     pub oidc: OidcSettings,
+    /// Who may create a handoff.
+    pub creation: CreationSettings,
+    /// What the recipient must prove to consume one.
+    pub recipient: RecipientSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CreationSettings {
+    /// Creating requires a signed-in user, and the sender is that identity
+    /// rather than a typed field. Turning this off allows anonymous creation,
+    /// which is the shape the abuse model exists to prevent.
+    pub require_oidc: bool,
+    /// The organization's own domains. When non-empty, the signed-in sender
+    /// must belong to one of them. Empty allows any.
+    pub allowed_domains: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RecipientSettings {
+    /// Consuming requires a signed-in user. Turn this off for the handoff to
+    /// someone outside the directory, who then presents the link and the
+    /// password like any standard-mode recipient.
+    pub require_oidc: bool,
+    /// The signed-in reader's address must equal the message's recipient.
+    /// Meaningless without `require_oidc`.
+    pub require_identity_match: bool,
+    /// Allow a recipient outside `creation.allowed_domains`. Only bites when
+    /// that list is non-empty; with no list every address is acceptable.
+    pub external_recipients: bool,
+}
+
+impl Default for CreationSettings {
+    fn default() -> Self {
+        Self {
+            require_oidc: true,
+            allowed_domains: Vec::new(),
+        }
+    }
+}
+
+impl Default for RecipientSettings {
+    fn default() -> Self {
+        Self {
+            require_oidc: true,
+            require_identity_match: true,
+            external_recipients: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -166,8 +218,9 @@ pub struct OidcSettings {
     /// document. For Entra ID: `https://login.microsoftonline.com/<tenant-id>/v2.0`.
     pub issuer: String,
     pub client_id: String,
-    /// Set through the environment (`CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET`)
-    /// or `client_secret_file`; never printed back.
+    /// Set through the environment
+    /// (`CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET`) or
+    /// `client_secret_file`; never printed back.
     #[serde(skip_serializing)]
     pub client_secret: Option<String>,
     pub client_secret_file: Option<PathBuf>,
@@ -176,15 +229,6 @@ pub struct OidcSettings {
     /// populate `email` when the `email` scope is requested; `preferred_username`
     /// is the fallback when the first is absent.
     pub email_claim: EmailClaim,
-    /// When non-empty, both the signed-in sender and every recipient must
-    /// belong to one of these domains.
-    pub allowed_domains: Vec<String>,
-    /// The signed-in reader's email must equal the message's recipient.
-    pub require_recipient_match: bool,
-    /// Allow creating a message without a session. Off: enterprise mode is closed.
-    pub anonymous_create: bool,
-    /// Allow reading a message without a session. Off: enterprise mode is closed.
-    pub anonymous_consume: bool,
     pub session_ttl_seconds: u64,
     /// How long a started login may take before it is forgotten.
     pub login_ttl_seconds: u64,
@@ -213,10 +257,6 @@ impl Default for OidcSettings {
                 "email".to_owned(),
             ],
             email_claim: EmailClaim::Email,
-            allowed_domains: Vec::new(),
-            require_recipient_match: true,
-            anonymous_create: false,
-            anonymous_consume: false,
             session_ttl_seconds: 8 * 3600,
             login_ttl_seconds: 600,
             trust_ca_path: None,
@@ -461,7 +501,7 @@ impl Settings {
             }
         }
         if self.mode == Mode::Enterprise {
-            let o = &self.auth.oidc;
+            let o = &self.enterprise.oidc;
             if self.server.public_base_url.is_none() {
                 return Err(ConfigError::Invalid(
                     "mode enterprise requires server.public_base_url".into(),
@@ -469,7 +509,7 @@ impl Settings {
             }
             let issuer = url::Url::parse(&o.issuer).map_err(|_| {
                 ConfigError::Invalid(
-                    "mode enterprise requires auth.oidc.issuer, an absolute URL".into(),
+                    "mode enterprise requires enterprise.oidc.issuer, an absolute URL".into(),
                 )
             })?;
             let local = matches!(
@@ -478,12 +518,13 @@ impl Settings {
             );
             if issuer.scheme() != "https" && !(issuer.scheme() == "http" && local) {
                 return Err(ConfigError::Invalid(
-                    "auth.oidc.issuer must use https (http is allowed for localhost only)".into(),
+                    "enterprise.oidc.issuer must use https (http is allowed for localhost only)"
+                        .into(),
                 ));
             }
             if o.client_id.trim().is_empty() {
                 return Err(ConfigError::Invalid(
-                    "auth.oidc.client_id is required".into(),
+                    "enterprise.oidc.client_id is required".into(),
                 ));
             }
             if o.client_secret
@@ -494,29 +535,40 @@ impl Settings {
                 && o.client_secret_file.is_none()
             {
                 return Err(ConfigError::Invalid(
-                    "auth.oidc needs client_secret (via CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET) or client_secret_file".into(),
+                    "enterprise.oidc needs client_secret (via CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET) or client_secret_file".into(),
                 ));
             }
             if !o.scopes.iter().any(|s| s == "openid") {
                 return Err(ConfigError::Invalid(
-                    "auth.oidc.scopes must include openid".into(),
+                    "enterprise.oidc.scopes must include openid".into(),
                 ));
             }
             if o.session_ttl_seconds < 60 || o.login_ttl_seconds < 30 {
                 return Err(ConfigError::Invalid(
-                    "auth.oidc session and login lifetimes are too short".into(),
+                    "enterprise.oidc session and login lifetimes are too short".into(),
                 ));
             }
-            for d in &o.allowed_domains {
+            for d in &self.enterprise.creation.allowed_domains {
                 if d.is_empty()
                     || d.contains('@')
                     || d.contains(char::is_whitespace)
                     || d != &d.to_ascii_lowercase()
                 {
                     return Err(ConfigError::Invalid(format!(
-                        "auth.oidc.allowed_domains entry {d:?} must be a lowercase domain"
+                        "enterprise.creation.allowed_domains entry {d:?} must be a lowercase domain"
                     )));
                 }
+            }
+            let r = &self.enterprise.recipient;
+            if r.require_identity_match && !r.require_oidc {
+                return Err(ConfigError::Invalid(
+                    "enterprise.recipient.require_identity_match needs require_oidc: a reader who does not sign in has no identity to match".into(),
+                ));
+            }
+            if !self.enterprise.creation.require_oidc && !self.public_https() {
+                return Err(ConfigError::Invalid(
+                    "enterprise.creation.require_oidc is off, which allows anonymous creation; serve over https before opening that".into(),
+                ));
             }
         }
         let t = &self.server.tls;
@@ -655,23 +707,23 @@ mod tests {
         assert!(s.validate().is_err());
         s.server.public_base_url = Some("https://send.example.com".into());
         assert!(s.validate().is_err());
-        s.auth.oidc.issuer = "https://login.microsoftonline.com/tenant/v2.0".into();
-        s.auth.oidc.client_id = "app".into();
+        s.enterprise.oidc.issuer = "https://login.microsoftonline.com/tenant/v2.0".into();
+        s.enterprise.oidc.client_id = "app".into();
         assert!(s.validate().is_err());
-        s.auth.oidc.client_secret = Some("x".into());
+        s.enterprise.oidc.client_secret = Some("x".into());
         s.validate().unwrap();
-        s.auth.oidc.issuer = "http://idp.example.com".into();
+        s.enterprise.oidc.issuer = "http://idp.example.com".into();
         assert!(s.validate().is_err());
-        s.auth.oidc.issuer = "http://127.0.0.1:9999".into();
+        s.enterprise.oidc.issuer = "http://127.0.0.1:9999".into();
         s.validate().unwrap();
-        s.auth.oidc.allowed_domains = vec!["Acme.com".into()];
+        s.enterprise.creation.allowed_domains = vec!["Acme.com".into()];
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn client_secret_is_never_serialized() {
         let mut s = Settings::default();
-        s.auth.oidc.client_secret = Some("hunter2".into());
+        s.enterprise.oidc.client_secret = Some("hunter2".into());
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("hunter2"));
     }

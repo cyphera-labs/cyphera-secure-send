@@ -93,20 +93,19 @@ function footer(): HTMLElement {
   return f;
 }
 
-function evalBanner(): HTMLElement | null {
-  if (config.mode !== "eval") return null;
+function modeNotice(): HTMLElement | null {
+  if (config.mode !== "standard") return null;
   return h(
     "div",
     { class: "mode-banner", role: "note" },
-    h("strong", {}, "Evaluation mode."),
-    " Sender and recipient identities are not verified. Intended for evaluation and testing; enable Enterprise mode for authenticated organizational use.",
+    "Access is controlled by the secure link and the password. Email addresses are recorded but not verified.",
   );
 }
 
 function page(...content: HTMLElement[]): void {
   clear(root);
   root.append(header());
-  const banner = evalBanner();
+  const banner = modeNotice();
   if (banner) root.append(banner);
   root.append(h("main", { class: "page" }, ...content), footer());
   root.hidden = false;

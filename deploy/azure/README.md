@@ -1,6 +1,6 @@
 # Deploy to Azure
 
-Azure Container Apps, standalone shape, eval mode by default: exactly one
+Azure Container Apps, standalone shape, standard mode by default: exactly one
 instance, messages in its memory, HTTPS from the platform, the management
 port private. Try the whole product in your own subscription without an
 identity provider; switch to enterprise mode when it is real.

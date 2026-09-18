@@ -22,9 +22,9 @@ param companyName string = ''
 @description('Primary brand color, #rgb or #rrggbb.')
 param primaryColor string = '#1f4e79'
 
-@description('eval: anyone with the link and the password; identities typed, not verified. enterprise: sign-in at your identity provider, verified sender, recipient binding.')
-@allowed(['eval', 'enterprise'])
-param mode string = 'eval'
+@description('standard: possession of the link and the password is the authority; addresses recorded, not verified. enterprise: sign-in at your identity provider, verified sender, recipient binding.')
+@allowed(['standard', 'enterprise'])
+param mode string = 'standard'
 
 @description('OIDC issuer. For Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0')
 param oidcIssuer string = ''
@@ -120,10 +120,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'CYPHERA_SECURESEND__BRANDING__COLORS__PRIMARY', value: primaryColor }
             { name: 'CYPHERA_SECURESEND__MODE', value: mode }
           ], oidcEnabled ? [
-            { name: 'CYPHERA_SECURESEND__AUTH__OIDC__ISSUER', value: oidcIssuer }
-            { name: 'CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_ID', value: oidcClientId }
-            { name: 'CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET', secretRef: 'oidc-client-secret' }
-            { name: 'CYPHERA_SECURESEND__AUTH__OIDC__ALLOWED_DOMAINS', value: allowedDomains }
+            { name: 'CYPHERA_SECURESEND__ENTERPRISE__OIDC__ISSUER', value: oidcIssuer }
+            { name: 'CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_ID', value: oidcClientId }
+            { name: 'CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET', secretRef: 'oidc-client-secret' }
+            { name: 'CYPHERA_SECURESEND__ENTERPRISE__CREATION__ALLOWED_DOMAINS', value: allowedDomains }
           ] : [])
           probes: [
             {

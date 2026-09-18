@@ -1,18 +1,62 @@
 # Identity: enterprise mode with OpenID Connect
 
-Eval mode is anyone with the link and the password, with typed, unverified
-sender and recipient addresses. Enterprise mode puts your identity provider
-in front of both ends of the handoff:
+Standard mode is anyone with the link and the password, with typed,
+unverified addresses. Enterprise mode puts your identity provider in front of
+the handoff and asks two questions that are configured separately, because
+they are genuinely different questions:
 
-- creating a message requires signing in, and the sender is the signed-in
-  user, not a typed field;
-- reading a message requires signing in **as the recipient it was sent to**;
-- senders and recipients can be limited to your domains;
-- every audit event carries the subject and the issuer.
+- **Who may create a handoff?** By default a signed-in user, and the sender
+  is that identity rather than a typed field. This is the control that
+  matters most: the service cannot inspect an encrypted message and never
+  claims to, so what it offers instead is accountability. Every message is
+  attributable to an authenticated organizational identity, and an
+  administrator can restrict, audit, rate-limit, or revoke that ability.
+- **What must the recipient prove?** By default, that they are signed in as
+  the address the message names. That can be relaxed independently, which is
+  what makes the handoff to someone outside your directory possible.
 
-It is generic OpenID Connect. Microsoft Entra ID is the example throughout
-because it is the common case; Okta, Keycloak, Ping, and any other
-standards-compliant provider work the same way.
+The cryptography is identical to standard mode. What enterprise adds is
+identity assurance and abuse control. It is free and part of this
+open-source build.
+
+## Two shapes worth knowing
+
+**Internal to internal**, the default. Alice signs in, addresses Bob, and only
+Bob can read it:
+
+```yaml
+mode: enterprise
+
+enterprise:
+  creation:
+    require_oidc: true
+    allowed_domains: [example.com]
+  recipient:
+    require_oidc: true
+    require_identity_match: true
+    external_recipients: false
+```
+
+**Internal to a customer or vendor.** Only authenticated staff may create, and
+the recipient, who has no account with you, reads with the link and the
+password like any standard-mode recipient. This is the helpdesk, managed
+service provider, and vendor case:
+
+```yaml
+mode: enterprise
+
+enterprise:
+  creation:
+    require_oidc: true
+    allowed_domains: [example.com]
+  recipient:
+    require_oidc: false
+    require_identity_match: false
+    external_recipients: true
+```
+
+Both keep the property that matters: nobody outside the organization can use
+your instance to create anything.
 
 ## Microsoft Entra ID
 
@@ -40,15 +84,16 @@ server:
   public_base_url: https://send.example.com
   hsts: true
 
-auth:
+enterprise:
   oidc:
     issuer: https://login.microsoftonline.com/<tenant-id>/v2.0
     client_id: <application (client) id>
+  creation:
     allowed_domains: [example.com]
 ```
 
 ```
-CYPHERA_SECURESEND__AUTH__OIDC__CLIENT_SECRET=<the secret value>
+CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET=<the secret value>
 ```
 
 Use the tenant-specific issuer with your directory (tenant) id, not
@@ -105,14 +150,29 @@ whether there is one and for whom.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `require_recipient_match` | `true` | the reader's email must equal the message's recipient |
-| `allowed_domains` | `[]` (any) | both the sender and every recipient must belong to one of these |
-| `anonymous_create` | `false` | allow creating without signing in |
-| `anonymous_consume` | `false` | allow reading without signing in |
+| `creation.require_oidc` | `true` | creating requires a session; the sender is the signed-in identity |
+| `creation.allowed_domains` | `[]` (any) | the signed-in sender must belong to one of your domains |
+| `recipient.require_oidc` | `true` | reading requires a session |
+| `recipient.require_identity_match` | `true` | the reader's address must equal the message's recipient |
+| `recipient.external_recipients` | `false` | a recipient outside your domains is acceptable |
 
 Addresses are compared case-insensitively. The defaults are closed: nobody
-outside the directory can use the service, and every message is attributable
-to a sender and readable by exactly one named person.
+outside the directory can use the service, every message is attributable to a
+sender, and each is readable by exactly one named person.
+
+The recipient check runs inside the same atomic step as the password proof,
+and before it, so a reader who is not the named recipient gets the same
+"unavailable" answer as anyone else and the message stays intact for the
+right person.
+
+## Revoking a sender
+
+Audit events carry the issuer and the subject alongside the address. The
+subject is the stable identifier; addresses change. To stop someone creating
+handoffs, disable or remove them at the identity provider, or drop them from
+whichever group or domain your configuration admits. Per-identity rate limits
+apply on top, keyed on the subject, so switching networks does not widen what
+one account can do.
 
 ## Other providers
 
