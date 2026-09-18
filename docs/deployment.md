@@ -147,6 +147,7 @@ The interface loads nothing from outside the service.
 
 ## Verifying a release
 
-Every release ships signed binaries, a signed multi-arch image, CycloneDX and
-SPDX SBOMs, and build provenance attestations. The release notes carry the
+Every release ships signed binaries, a signed multi-architecture image,
+CycloneDX and SPDX SBOMs, and build provenance attestations. Each signed file
+has a `.sigstore.json` bundle beside it; the release notes carry the exact
 `cosign verify-blob` command and the image digest.
