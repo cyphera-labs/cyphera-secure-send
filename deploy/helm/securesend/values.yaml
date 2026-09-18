@@ -120,9 +120,12 @@ resources:
   requests:
     cpu: 100m
     memory: 128Mi
+    # The root filesystem is read-only and nothing is written to disk.
+    ephemeral-storage: 64Mi
   limits:
     # Leave headroom above messages.memory_budget_bytes.
     memory: 512Mi
+    ephemeral-storage: 256Mi
 
 podSecurityContext:
   runAsNonRoot: true

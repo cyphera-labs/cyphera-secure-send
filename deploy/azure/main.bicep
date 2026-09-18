@@ -75,6 +75,9 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
+// No identity block: the app pulls a public image and calls no Azure service,
+// so it needs no managed identity. Add one if you move the image to a private
+// registry or start reading from Key Vault.
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
