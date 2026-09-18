@@ -1,0 +1,14 @@
+# The published image. It carries the binaries the release already
+# cross-compiled and signed, so building for another architecture copies a
+# file rather than emulating a compiler. Build from source with the plain
+# Dockerfile instead; this one expects ./dist to hold
+# cyphera-secure-send-linux-amd64 and -arm64.
+
+FROM cgr.dev/chainguard/glibc-dynamic@sha256:94ec8c23c45c7aad22b6ab400dc7e1b46dd36f4c71d6c7a3976c8ad4e36ca266
+ARG TARGETARCH
+COPY --chmod=0755 dist/cyphera-secure-send-linux-${TARGETARCH} /usr/local/bin/cyphera-secure-send
+USER nonroot
+EXPOSE 8080 9090
+ENV CYPHERA_SECURESEND__SERVER__MANAGEMENT_BIND=0.0.0.0:9090
+ENTRYPOINT ["/usr/local/bin/cyphera-secure-send"]
+CMD ["serve"]
