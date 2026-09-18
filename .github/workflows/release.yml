@@ -197,6 +197,8 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: false
+          # A tag carrying a hyphen is a candidate, not a release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             Container: `${{ env.IMAGE }}@${{ needs.container.outputs.digest }}`
             Helm chart: `oci://ghcr.io/${{ github.repository_owner }}/charts/securesend` version `${{ github.ref_name }}` (tag without the `v`)
