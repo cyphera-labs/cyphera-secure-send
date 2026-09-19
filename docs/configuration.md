@@ -42,6 +42,7 @@ response, not features.
 | `public_base_url` | unset | the URL users reach the service at; required in enterprise mode |
 | `management_bind` | `127.0.0.1:9090` | `/livez`, `/readyz`, `/metrics`. Keep it off the public network |
 | `trusted_proxies` | `[]` | CIDRs. `X-Forwarded-For` is honored only when the peer is inside one |
+| `trusted_hops` | `0` | how many entries at the end of `X-Forwarded-For` your own infrastructure appended, for a managed platform whose addresses are not published. Mutually exclusive with `trusted_proxies`, and unsafe anywhere the service can be reached directly |
 | `hsts` | `false` | emit `Strict-Transport-Security`; enable once HTTPS is in place |
 | `shutdown_timeout_seconds` | `10` | drain time on SIGTERM |
 | `tls.cert_path`, `tls.key_path` | unset | set both to terminate TLS in-process (PEM) |
@@ -63,7 +64,8 @@ response, not features.
 
 Token buckets, per minute. Per client address: `create_per_minute` (10),
 `consume_per_minute` (30), `revoke_per_minute` (30). Behind a proxy, set
-`server.trusted_proxies` or every client shares one bucket.
+either `server.trusted_proxies` or `server.trusted_hops`, or every client
+shares one bucket.
 
 In enterprise mode a second bucket applies per signed-in identity, so a
 caller is bounded however many addresses they come from:

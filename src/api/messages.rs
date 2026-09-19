@@ -58,7 +58,12 @@ async fn context(
     peer: SocketAddr,
     headers: &HeaderMap,
 ) -> (std::net::IpAddr, ClientContext, RequestPrincipal) {
-    let ip = client_ip::resolve(peer, headers, &state.settings.server.trusted_proxies);
+    let ip = client_ip::resolve(
+        peer,
+        headers,
+        &state.settings.server.trusted_proxies,
+        state.settings.server.trusted_hops,
+    );
     let principal = super::auth::principal(state, headers).await;
     let audit = &state.settings.audit;
     let ctx = ClientContext {

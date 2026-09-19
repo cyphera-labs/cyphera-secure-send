@@ -83,13 +83,23 @@ Each of these is enforced by a test.
 5. Every consume failure (unknown id, malformed id, wrong proof, expired,
    revoked, already consumed, burned) returns the same status, body, and
    headers, and runs a comparison even when there is nothing to compare.
-6. The configured number of wrong proofs destroys the message.
-7. Removal happens before the response is built. A connection that drops
-   after that point loses the message.
+6. The configured number of wrong proofs destroys the message. Someone who
+   holds the link but not the password can therefore spend those attempts to
+   deny delivery, without ever reading anything. The limit is configurable,
+   and the alternative, unlimited attempts, hands that same person an offline
+   guessing target instead.
+7. Removal happens before the response is built, which makes delivery **at
+   most once**, not exactly once: a connection that drops after that point
+   loses the message, and nothing can recover it. That is the deliberate
+   trade for never handing the same message over twice.
 8. Memory is bounded. When the budget is exceeded the least valuable entries
    are evicted and each eviction is audited.
 9. A restart discards every pending message. Nothing is written to disk.
-10. Audit events cannot carry secrets: the event type has no field for them.
+10. Audit events carry no message secret: the event type has no field for
+    plaintext, password, proof, verifier, link secret, or revoke token, and
+    no free-text field a diagnostic could leak through. It does carry
+    addresses and, when the operator asks for them, the client address and
+    user agent, which are strings an operator chooses to record.
 11. Every response, including static files and 404s, carries `no-store`,
     `no-referrer`, `nosniff`, and a Content Security Policy with no
     `unsafe-*` source.
@@ -117,7 +127,7 @@ Each of these is enforced by a test.
 |---|---|---|
 | Passive observer on the network | yes | TLS, and nothing useful in URLs anyway |
 | Server operator, memory dump, copy of the store | yes | ciphertext, hashes, and a verifier that cannot be attacked without the link |
-| Link intercepted, password not | yes | the proof cannot be derived; wrong proofs are counted and the message burns |
+| Link intercepted, password not | partly | the proof cannot be derived, so the message cannot be read; but the holder can spend the failed-attempt limit and destroy it, denying delivery |
 | Password intercepted, link not | yes | nothing to attack |
 | Link and ciphertext both obtained | partly | bounded by password strength and PBKDF2 cost; the interface offers a generated password |
 | Recipient double-read, replay | yes | atomic take |

@@ -15,7 +15,7 @@ gcloud run deploy securesend \
   --allow-unauthenticated \
   --set-env-vars "CYPHERA_SECURESEND__SERVER__HSTS=true,\
 CYPHERA_SECURESEND__SERVER__MANAGEMENT_BIND=127.0.0.1:9090,\
-CYPHERA_SECURESEND__SERVER__TRUSTED_PROXIES=0.0.0.0/0,\
+CYPHERA_SECURESEND__SERVER__TRUSTED_HOPS=1,\
 CYPHERA_SECURESEND__BRANDING__COMPANY_NAME=Acme"
 ```
 
@@ -23,10 +23,16 @@ Then set the public base URL to the URL the deploy printed and redeploy with
 `--update-env-vars CYPHERA_SECURESEND__SERVER__PUBLIC_BASE_URL=https://...`,
 or map a custom domain first and use that.
 
-Cloud Run terminates TLS and forwards the client address in
-`X-Forwarded-For` from its own front end, which is why trusted proxies is set
-to everything here: the only peer the container ever sees is Cloud Run's
-proxy. Do not use that setting anywhere the container is reachable directly.
+Cloud Run terminates TLS and appends its own entry to `X-Forwarded-For`, and
+its front-end addresses are not published, so there is no network to name as
+trusted. `TRUSTED_HOPS=1` says instead that exactly one entry at the end of
+that header was added by infrastructure in front of this service, and the
+client is the entry before it. Trusting every address would have the opposite
+effect: the resolver would skip the whole chain and fall back to the platform
+proxy, putting every client in one rate-limit bucket.
+
+Set this only where the container cannot be reached directly. Anywhere a
+client can connect straight to it, a forged header would be believed.
 
 Enterprise mode: store the client secret in Secret Manager and reference it:
 

@@ -1,7 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Cyphera SecureSend, standalone shape on ECS Fargate behind an Application Load
-  Balancer, standard mode by default. Exactly one task; messages live in its memory. Deployments replace
+  Balancer, standard mode by default. Serves HTTPS on a name you own, because
+  the browser does the encryption and the Web Crypto API requires a secure
+  context. Exactly one task; messages live in its memory. Deployments replace
   the task (minimum healthy 0, maximum 100) so two instances never overlap.
 
 Metadata:
@@ -10,7 +12,7 @@ Metadata:
       - Label: { default: Network }
         Parameters: [VpcId, PublicSubnetIds, AccessLogsBucket]
       - Label: { default: Service }
-        Parameters: [Image, CertificateArn, CompanyName, PrimaryColor, DefaultTtlSeconds, MemoryBudgetBytes]
+        Parameters: [Image, PublicHostname, CertificateArn, CompanyName, PrimaryColor, DefaultTtlSeconds, MemoryBudgetBytes]
       - Label: { default: Identity (enterprise mode) }
         Parameters: [Mode, OidcIssuer, OidcClientId, OidcClientSecret, AllowedDomains]
 
@@ -32,10 +34,18 @@ Parameters:
       Optional S3 bucket for load balancer access logs. Empty leaves them off.
       Request paths carry the public message identifier and never a secret, so
       logs are safe to keep; the bucket and its policy are yours to create.
+  PublicHostname:
+    Type: String
+    Description: >-
+      The name users will reach the service at, for example send.example.com.
+      Point it at the load balancer after the stack is created. The browser
+      performs the encryption, and the Web Crypto API is only available in a
+      secure context, so this must be a name your certificate covers.
+    AllowedPattern: "^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$"
   CertificateArn:
     Type: String
-    Default: ""
-    Description: ACM certificate ARN for HTTPS. Leave empty to serve plain HTTP for evaluation only; enterprise mode requires HTTPS.
+    Description: ACM certificate ARN covering PublicHostname.
+    AllowedPattern: "^arn:aws[a-z-]*:acm:.+$"
   CompanyName:
     Type: String
     Default: ""
@@ -73,7 +83,7 @@ Parameters:
     Description: Comma-separated allowed email domains. Empty allows any.
 
 Rules:
-  OidcNeedsSecretAndHttps:
+  OidcNeedsItsInputs:
     RuleCondition: !Equals [!Ref Mode, enterprise]
     Assertions:
       - Assert: !Not [!Equals [!Ref OidcClientSecret, ""]]
@@ -82,12 +92,9 @@ Rules:
         AssertDescription: mode enterprise requires OidcIssuer
       - Assert: !Not [!Equals [!Ref OidcClientId, ""]]
         AssertDescription: mode enterprise requires OidcClientId
-      - Assert: !Not [!Equals [!Ref CertificateArn, ""]]
-        AssertDescription: mode enterprise requires HTTPS, so CertificateArn is required
 
 Conditions:
   UseAccessLogs: !Not [!Equals [!Ref AccessLogsBucket, ""]]
-  UseHttps: !Not [!Equals [!Ref CertificateArn, ""]]
   UseOidc: !Equals [!Ref Mode, enterprise]
 
 Resources:
@@ -112,13 +119,10 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-        - !If
-          - UseHttps
-          - IpProtocol: tcp
-            FromPort: 443
-            ToPort: 443
-            CidrIp: 0.0.0.0/0
-          - !Ref AWS::NoValue
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
 
   TaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -176,19 +180,14 @@ Resources:
       Port: 80
       Protocol: HTTP
       DefaultActions:
-        - !If
-          - UseHttps
-          - Type: redirect
-            RedirectConfig:
-              Protocol: HTTPS
-              Port: "443"
-              StatusCode: HTTP_301
-          - Type: forward
-            TargetGroupArn: !Ref TargetGroup
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
 
   HttpsListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
-    Condition: UseHttps
     Properties:
       LoadBalancerArn: !Ref LoadBalancer
       Port: 443
@@ -259,12 +258,9 @@ Resources:
               Protocol: tcp
           Environment:
             - Name: CYPHERA_SECURESEND__SERVER__PUBLIC_BASE_URL
-              Value: !If
-                - UseHttps
-                - !Sub "https://${LoadBalancer.DNSName}"
-                - !Sub "http://${LoadBalancer.DNSName}"
+              Value: !Sub "https://${PublicHostname}"
             - Name: CYPHERA_SECURESEND__SERVER__HSTS
-              Value: !If [UseHttps, "true", "false"]
+              Value: "true"
             - Name: CYPHERA_SECURESEND__SERVER__MANAGEMENT_BIND
               Value: 127.0.0.1:9090
             # The load balancer's addresses are inside the VPC; trust the VPC.
@@ -330,14 +326,11 @@ Resources:
 
 Outputs:
   Url:
-    Description: Where the service answers. Put your own domain in front for production.
-    Value: !If
-      - UseHttps
-      - !Sub "https://${LoadBalancer.DNSName}"
-      - !Sub "http://${LoadBalancer.DNSName}"
+    Description: Where the service answers once PublicHostname points at the load balancer.
+    Value: !Sub "https://${PublicHostname}"
+  PointThisNameAtTheLoadBalancer:
+    Description: Create a DNS record for PublicHostname aliasing this name.
+    Value: !GetAtt LoadBalancer.DNSName
   OidcRedirectUri:
     Description: Register this redirect URI at your identity provider.
-    Value: !If
-      - UseHttps
-      - !Sub "https://${LoadBalancer.DNSName}/auth/callback"
-      - !Sub "http://${LoadBalancer.DNSName}/auth/callback"
+    Value: !Sub "https://${PublicHostname}/auth/callback"

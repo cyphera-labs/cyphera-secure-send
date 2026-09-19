@@ -84,6 +84,7 @@ for name in "${names[@]}"; do
     *ALLOWED_DOMAINS) value="example.com,example.org" ;;
     *SCOPES) value="openid,profile,email" ;;
     *TRUSTED_PROXIES) value="10.0.0.0/8" ;;
+    *TRUSTED_HOPS) value="1" ;;
     *TTL_OPTIONS_SECONDS) value="300,3600" ;;
     *_BIND) value="127.0.0.1:9091" ;;
     *PUBLIC_BASE_URL) value="https://send.example.com" ;;

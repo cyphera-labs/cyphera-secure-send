@@ -112,8 +112,12 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'CYPHERA_SECURESEND__SERVER__PUBLIC_BASE_URL', value: publicBaseUrl }
             { name: 'CYPHERA_SECURESEND__SERVER__HSTS', value: 'true' }
             { name: 'CYPHERA_SECURESEND__SERVER__MANAGEMENT_BIND', value: '0.0.0.0:9090' }
-            // The Container Apps ingress proxies from the environment's internal range.
-            { name: 'CYPHERA_SECURESEND__SERVER__TRUSTED_PROXIES', value: '10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16' }
+            // The ingress appends one entry to X-Forwarded-For and its
+            // addresses are not fixed, so count the hop rather than naming
+            // networks: trusting broad private ranges would make the
+            // resolver fall back to the proxy and bucket every client
+            // together.
+            { name: 'CYPHERA_SECURESEND__SERVER__TRUSTED_HOPS', value: '1' }
             { name: 'CYPHERA_SECURESEND__MESSAGES__DEFAULT_TTL_SECONDS', value: string(defaultTtlSeconds) }
             { name: 'CYPHERA_SECURESEND__MESSAGES__MEMORY_BUDGET_BYTES', value: string(memoryBudgetBytes) }
             { name: 'CYPHERA_SECURESEND__BRANDING__COMPANY_NAME', value: companyName }

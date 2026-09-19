@@ -192,6 +192,7 @@ impl MessageService {
         let stored = StoredMessage {
             id: id.clone(),
             sender: sender.clone(),
+            sender_authenticated: principal.is_authenticated(),
             recipient: recipient.clone(),
             envelope,
             verifier,
@@ -212,7 +213,7 @@ impl MessageService {
         let mut event = AuditEvent::success(AuditEventType::MessageCreated)
             .with_message(&id)
             .with_client(client)
-            .with_identities(principal.is_authenticated());
+            .with_sender_authenticated(principal.is_authenticated());
         event.sender = Some(sender.to_string());
         event.recipient = Some(recipient.to_string());
         event.ttl_seconds = Some(request.ttl_seconds as i64);
@@ -244,6 +245,7 @@ impl MessageService {
         };
 
         let policy = self.authorizer.consume_policy(principal);
+        let binding_enforced = policy.expected_recipient.is_some();
         match self.store.take(&id, &proof, &policy).await {
             TakeOutcome::Taken(message) => {
                 let message = *message;
@@ -252,7 +254,8 @@ impl MessageService {
                 let mut event = AuditEvent::success(AuditEventType::MessageConsumed)
                     .with_message(&id)
                     .with_client(client)
-                    .with_identities(principal.is_authenticated());
+                    .with_sender_authenticated(message.sender_authenticated)
+                    .with_reader(principal.is_authenticated(), binding_enforced);
                 event.sender = Some(message.sender.to_string());
                 event.recipient = Some(message.recipient.to_string());
                 event.ttl_seconds = Some(message.ttl_seconds());

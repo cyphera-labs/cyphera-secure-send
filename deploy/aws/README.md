@@ -12,12 +12,17 @@ aws cloudformation deploy \
   --parameter-overrides \
     VpcId=vpc-0123456789abcdef0 \
     PublicSubnetIds=subnet-aaaa,subnet-bbbb \
+    PublicHostname=send.example.com \
     CertificateArn=arn:aws:acm:us-east-1:123456789012:certificate/... \
     CompanyName=Acme PrimaryColor='#0057b8'
 ```
 
-Outputs give the URL and the OIDC redirect URI. Point your own domain at the
-load balancer for production; the certificate must cover that name.
+A hostname you own and a certificate covering it are both required. The
+browser performs the encryption and the Web Crypto API is unavailable outside
+a secure context, so there is no useful plain HTTP deployment to offer. After
+the stack is created, point that name at the load balancer using the
+`PointThisNameAtTheLoadBalancer` output; the service answers on it, and the
+`OidcRedirectUri` output is what you register with your identity provider.
 
 Enterprise mode, with Entra ID (see [docs/identity.md](../../docs/identity.md)):
 
@@ -44,8 +49,7 @@ Until then, the command above is the path.
 - `DesiredCount: 1` with `MinimumHealthyPercent: 0` and `MaximumPercent: 100`:
   a deployment stops the old task before starting the new one, so two
   memory-backed tasks never run at once.
-- HTTP redirects to HTTPS when a certificate is given; without one the stack
-  serves plain HTTP for evaluation only.
+- HTTP redirects to HTTPS, always.
 - Task security group accepts traffic from the load balancer only; the
   container runs read-only as a non-root user.
 - Trusted proxies cover the VPC's private ranges, which is where the load

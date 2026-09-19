@@ -52,15 +52,6 @@ impl AuditEventType {
     }
 }
 
-/// Whether the sender and recipient on an event were typed by the user
-/// (eval mode) or established by the identity provider (enterprise mode).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Identities {
-    Asserted,
-    Verified,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -101,8 +92,19 @@ pub struct AuditEvent {
     pub sender: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipient: Option<String>,
+    /// Whether the address in `sender` was established by the identity
+    /// provider, as opposed to typed by whoever created the message. The
+    /// recipient address is always typed by the sender, so it carries no
+    /// such claim.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub identities: Option<Identities>,
+    pub sender_authenticated: Option<bool>,
+    /// On a retrieval: whether the reader was signed in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reader_authenticated: Option<bool>,
+    /// On a retrieval: whether the service required the reader to be the
+    /// address the message names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipient_binding_enforced: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl_seconds: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,7 +136,9 @@ impl AuditEvent {
             message_id: None,
             sender: None,
             recipient: None,
-            identities: None,
+            sender_authenticated: None,
+            reader_authenticated: None,
+            recipient_binding_enforced: None,
             ttl_seconds: None,
             expires_at: None,
             failed_proofs: None,
@@ -169,14 +173,18 @@ impl AuditEvent {
         self
     }
 
-    /// Marks sender and recipient as verified when the caller is signed in,
-    /// asserted otherwise.
-    pub fn with_identities(mut self, verified: bool) -> Self {
-        self.identities = Some(if verified {
-            Identities::Verified
-        } else {
-            Identities::Asserted
-        });
+    /// Records that the sender address came from the identity provider
+    /// rather than from a form field.
+    pub fn with_sender_authenticated(mut self, authenticated: bool) -> Self {
+        self.sender_authenticated = Some(authenticated);
+        self
+    }
+
+    /// Records what the reader actually proved: whether they were signed in,
+    /// and whether the service required them to be the named recipient.
+    pub fn with_reader(mut self, authenticated: bool, binding_enforced: bool) -> Self {
+        self.reader_authenticated = Some(authenticated);
+        self.recipient_binding_enforced = Some(binding_enforced);
         self
     }
 }

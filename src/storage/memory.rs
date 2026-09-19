@@ -237,6 +237,7 @@ mod tests {
         let m = StoredMessage {
             id: MessageId::generate().unwrap(),
             sender: Email::parse("a@example.com").unwrap(),
+            sender_authenticated: false,
             recipient: Email::parse("b@example.com").unwrap(),
             envelope: Envelope {
                 iterations: 100_000,

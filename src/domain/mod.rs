@@ -18,6 +18,10 @@ use time::OffsetDateTime;
 pub struct StoredMessage {
     pub id: MessageId,
     pub sender: Email,
+    /// Whether `sender` was established by the identity provider at creation
+    /// time. Carried so a retrieval event can state the sender's provenance
+    /// without the reader's own session being mistaken for it.
+    pub sender_authenticated: bool,
     pub recipient: Email,
     pub envelope: Envelope,
     pub verifier: Verifier,

@@ -30,8 +30,9 @@ SECURESEND
 
 SecureSend is the moment in between. The sender types the secret, sets a
 password and an expiry, and gets a link. Link and password travel on different
-channels. Bob opens the link, enters the password, reads the message once, and
-it no longer exists anywhere.
+channels. Bob opens the link, enters the password, and reads the message. The
+server then has nothing left to hand over: it is removed before the reply is
+written, and no second retrieval can succeed.
 
 Not a password manager. Not a vault. It handles the handoff.
 
@@ -43,13 +44,17 @@ to.
 
 - **The server never sees the secret.** Encryption happens in the browser
   with Web Crypto. The server stores ciphertext and a hash it cannot invert.
-- **A wrong password does not destroy the message, and a stolen link alone
-  cannot read or burn it.** The recipient proves possession of both the link
-  and the password before the server hands anything over.
+- **A wrong password does not destroy the message, and the link alone cannot
+  read it.** The recipient proves possession of both the link and the
+  password before the server hands anything over. Repeated wrong attempts do
+  eventually destroy it, which is deliberate: the count is configurable, and
+  someone holding only the link can spend it to deny delivery.
 - **One binary, no database.** Messages live in bounded process memory and
   vanish on restart. That is a feature.
-- **Exactly once.** Consumption is an atomic take. Two readers racing get one
-  message and one "unavailable".
+- **At most once.** Consumption is an atomic take, so two readers racing get
+  one message and one "unavailable". At most, not exactly: the message is
+  removed before the reply is written, so a connection that dies in between
+  loses it, and no retry can recover it.
 - **Nothing leaks by shape.** Every failure looks the same. No secret ever
   appears in a URL path, a log line, or an audit event.
 - **Your identity provider in front of it.** Enterprise mode signs everyone
@@ -148,7 +153,7 @@ held back behind a licence.
 | | |
 |---|---|
 | `POST /v1/messages` | create; returns `id`, `revoke_token`, `expires_at` once |
-| `POST /v1/messages/{id}/consume` | body `{proof}`; returns the envelope exactly once, or `404 {"error":"unavailable"}` |
+| `POST /v1/messages/{id}/consume` | body `{proof}`; returns the envelope to at most one caller, or `404 {"error":"unavailable"}` |
 | `POST /v1/messages/{id}/revoke` | body `{revoke_token}`; always `204` |
 | `GET /v1/ui-config` | branding, limits, and the mode for the interface |
 | `GET /v1/session` | who is signed in, if anyone |

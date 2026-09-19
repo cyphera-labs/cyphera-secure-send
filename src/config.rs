@@ -48,6 +48,13 @@ pub struct ServerSettings {
     /// Networks whose `X-Forwarded-For` is trusted. Empty means the peer
     /// address is always the client address.
     pub trusted_proxies: Vec<IpNet>,
+    /// How many entries at the end of `X-Forwarded-For` were appended by
+    /// infrastructure you control, when that infrastructure's addresses are
+    /// not knowable in advance. One on a platform whose front end adds a
+    /// single entry. Mutually exclusive with `trusted_proxies`, because they
+    /// answer the same question in incompatible ways, and dangerous to set
+    /// anywhere the service can also be reached directly.
+    pub trusted_hops: u8,
     /// Emit `Strict-Transport-Security`. Enable only when the service is
     /// reached over HTTPS, in-process or via a proxy.
     pub hsts: bool,
@@ -320,6 +327,7 @@ impl Default for ServerSettings {
             public_base_url: None,
             management_bind: "127.0.0.1:9090".parse().expect("static address"),
             trusted_proxies: Vec::new(),
+            trusted_hops: 0,
             hsts: false,
             shutdown_timeout_seconds: 10,
             tls: TlsSettings::default(),
@@ -624,6 +632,16 @@ impl Settings {
                     "enterprise.creation.require_oidc is off, which allows anonymous creation; serve over https before opening that".into(),
                 ));
             }
+        }
+        if self.server.trusted_hops > 0 && !self.server.trusted_proxies.is_empty() {
+            return Err(ConfigError::Invalid(
+                "server.trusted_hops and server.trusted_proxies cannot both be set: choose known proxy networks, or a count of hops you control".into(),
+            ));
+        }
+        if self.server.trusted_hops > 8 {
+            return Err(ConfigError::Invalid(
+                "server.trusted_hops is implausibly large".into(),
+            ));
         }
         let t = &self.server.tls;
         if t.cert_path.is_some() != t.key_path.is_some() {

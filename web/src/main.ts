@@ -354,6 +354,11 @@ function reveal(id: string): void {
       status.append(notice("error", "Enter the password."));
       return;
     }
+    // Held for the whole operation: the field is read once for the proof and
+    // again after the message has been consumed, and a message consumed with
+    // an edited field in between could never be decrypted.
+    const secret = password.value;
+    password.disabled = true;
     busy(submit, true, "Checking…");
     try {
       const envelopeForProof = {
@@ -362,10 +367,10 @@ function reveal(id: string): void {
         cipher: { name: "AES-256-GCM", iv: "" },
         ciphertext: "",
       };
-      const proof = await proofFor(envelopeForProof, password.value, params!.linkSecret);
+      const proof = await proofFor(envelopeForProof, secret, params!.linkSecret);
       const consumed = await api.consume(id, proof);
       busy(submit, true, "Decrypting…");
-      const plain = await open(consumed.envelope, password.value, params!.linkSecret);
+      const plain = await open(consumed.envelope, secret, params!.linkSecret);
       password.value = "";
       revealedView(plain, consumed.sender);
     } catch (e) {
@@ -374,6 +379,7 @@ function reveal(id: string): void {
       } else {
         status.append(notice("error", describeError(e, "Could not decrypt the message.")));
       }
+      password.disabled = false;
       busy(submit, false, "Reveal message");
     }
   }

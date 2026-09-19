@@ -76,6 +76,14 @@ describe("fragment", () => {
     expect(decoded).toEqual({ linkSecret: sealed.linkSecret, salt: sealed.envelope.kdf.salt, iterations: 600000 });
   });
 
+  it("refuses a work factor outside what the interface supports", () => {
+    const secret = "a".repeat(43);
+    const salt = "b".repeat(22);
+    // 36^7 is far beyond any sane derivation cost.
+    expect(decodeFragment(`#${secret}.${salt}.zzzzzzz`)).toBeNull();
+    expect(decodeFragment(`#${secret}.${salt}.1`)).toBeNull();
+  });
+
   it("rejects malformed fragments", () => {
     expect(decodeFragment("")).toBeNull();
     expect(decodeFragment("#a.b")).toBeNull();

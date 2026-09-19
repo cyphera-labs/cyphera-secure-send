@@ -242,6 +242,21 @@ jobs:
           name: web-coverage
           path: web/coverage
       - if: env.SONAR_TOKEN == ''
-        run: echo "SONAR_TOKEN is not configured; skipping analysis."
+        # A missing token is a warning while the repository is private and a
+        # failure once it is public, so a green job never stands in for an
+        # analysis that did not run.
+        run: |
+          {
+            echo "### Code analysis did not run"
+            echo
+            echo "No token is configured, so no analysis was performed for this commit."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning title=Analysis skipped::SONAR_TOKEN is not configured; no analysis ran for this commit."
+          if [ "${IS_PUBLIC}" = "true" ]; then
+            echo "A public repository must not report a green analysis job that performed no analysis." >&2
+            exit 1
+          fi
+        env:
+          IS_PUBLIC: ${{ !github.event.repository.private }}
       - if: env.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1

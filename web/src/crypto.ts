@@ -16,6 +16,11 @@
 import { base64, base64url, concat, utf8, type Bytes } from "./encoding";
 
 export const ENVELOPE_VERSION = 1;
+/** Bounds on the work a link may ask for. A link is not a stored message, so
+ *  nothing the server checked applies to one; without these a crafted link
+ *  could ask the browser for an unbounded derivation. */
+export const MIN_ITERATIONS = 1_000;
+export const MAX_ITERATIONS = 10_000_000;
 export const KDF_NAME = "PBKDF2-SHA256";
 export const CIPHER_NAME = "AES-256-GCM";
 const INFO_ENC = "cyphera-securesend/v1/enc";
@@ -77,6 +82,9 @@ export async function deriveKeys(
 ): Promise<DerivedKeys> {
   if (linkSecret.length !== SECRET_BYTES) throw new Error("link secret must be 32 bytes");
   if (salt.length !== SALT_BYTES) throw new Error("salt must be 16 bytes");
+  if (!Number.isSafeInteger(iterations) || iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) {
+    throw new Error("unsupported key derivation work factor");
+  }
   const passwordKey = await subtle.importKey("raw", utf8.encode(password.normalize("NFKC")), "PBKDF2", false, [
     "deriveBits",
   ]);
@@ -172,6 +180,8 @@ export function decodeFragment(fragment: string): LinkParams | null {
   if (!/^[A-Za-z0-9_-]{22}$/.test(salt)) return null;
   if (!/^[0-9a-z]{1,8}$/.test(iter)) return null;
   const iterations = Number.parseInt(iter, 36);
-  if (!Number.isSafeInteger(iterations) || iterations <= 0) return null;
+  if (!Number.isSafeInteger(iterations) || iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) {
+    return null;
+  }
   return { linkSecret, salt: base64.encode(base64url.decode(salt)), iterations };
 }

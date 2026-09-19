@@ -60,7 +60,9 @@ strategy. What matters:
   large organization: the default budget holds thousands of maximum-size
   messages, and a restart takes well under a second.
 - **Proxy.** Set `server.trusted_proxies` to your ingress's address range so
-  rate limiting and audit see the real client address.
+  rate limiting and audit see the real client address. Where those addresses
+  are not knowable, as on a managed platform, set `server.trusted_hops` to
+  the number of entries your own infrastructure appends instead.
 - **TLS.** Terminate at the ingress, or set `server.tls.cert_path` and
   `server.tls.key_path` to terminate in-process. Enable `server.hsts` once
   HTTPS is in place.
@@ -97,6 +99,10 @@ works against it:
 | Azure Container Apps | min replicas 0, max 10 | scale-to-zero discards messages; scale-out splits them; the platform may briefly run extra replicas during maintenance |
 | Google Cloud Run | scales to zero; max instances is a soft limit | same: pin min and max instances to 1, and accept that a revision rollout replaces the instance |
 | AWS ECS on Fargate | service deployments start the replacement before stopping the old task | set minimum healthy percent to 0 and maximum to 100 so only one task ever runs, and expect task replacement on platform maintenance |
+
+Whichever platform, serve it over HTTPS on a name you own: the browser does
+the encryption, and the Web Crypto API is unavailable outside a secure
+context, so a plain HTTP deployment cannot work at all beyond localhost.
 
 In enterprise mode, sessions and in-progress sign-ins live in the same process
 memory, so the single-instance rule covers them too: a second instance would

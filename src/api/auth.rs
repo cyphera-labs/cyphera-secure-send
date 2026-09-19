@@ -201,7 +201,12 @@ fn sanitize(s: &str) -> String {
 }
 
 fn client_context(state: &SharedState, peer: SocketAddr, headers: &HeaderMap) -> ClientContext {
-    let ip = super::client_ip::resolve(peer, headers, &state.settings.server.trusted_proxies);
+    let ip = super::client_ip::resolve(
+        peer,
+        headers,
+        &state.settings.server.trusted_proxies,
+        state.settings.server.trusted_hops,
+    );
     let audit = &state.settings.audit;
     ClientContext {
         ip: audit.include_client_ip.then(|| ip.to_string()),
