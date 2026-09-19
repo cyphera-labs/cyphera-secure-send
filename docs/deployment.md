@@ -141,7 +141,15 @@ One JSON object per line on stdout. Types:
 
 Fields (present when relevant): `event_id`, `type`, `time`, `outcome`,
 `reason`, `message_id`, `sender`, `recipient`, `ttl_seconds`, `expires_at`,
-`failed_proofs`, `client_ip`, `user_agent`, `active_messages`.
+`failed_proofs`, `client_ip`, `user_agent`, `active_messages`, and in
+enterprise mode `subject` and `issuer`.
+
+Three fields say what each party proved rather than lumping them together:
+`sender_authenticated` is whether the sender's address came from the identity
+provider, carried on the message so a retrieval reports it truthfully;
+`reader_authenticated` is whether the reader signed in; and
+`recipient_binding_enforced` is whether the reader had to be the address the
+message names.
 
 `reason` values: `not_found`, `wrong_proof`, `wrong_revoke_token`, `burned`,
 `unauthorized`, `create`, `consume`, `revoke`.

@@ -31,9 +31,12 @@ struct Idp {
     issuer: String,
     client_id: String,
     client_secret: String,
-    signing_key: EncodingKey,
-    jwk_n: String,
-    jwk_e: String,
+    /// Replaced when the provider rotates, exactly as a real one does on its
+    /// own schedule.
+    signing: Mutex<SigningKey>,
+    /// How many times the key set has been fetched, so a test can tell a
+    /// refresh from a cached read.
+    jwks_reads: Mutex<u32>,
     /// The user the next login will produce.
     next_email: Mutex<String>,
     /// What the next token says about that address: Some(true), Some(false),
@@ -42,6 +45,24 @@ struct Idp {
     /// code -> (nonce, code_challenge)
     codes: Mutex<HashMap<String, (String, String)>>,
     token_calls: Mutex<u32>,
+}
+
+struct SigningKey {
+    kid: String,
+    key: EncodingKey,
+    n: String,
+    e: String,
+}
+
+fn generate_signing_key(kid: &str) -> SigningKey {
+    let key = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let pem = key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).unwrap();
+    SigningKey {
+        kid: kid.to_owned(),
+        key: EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap(),
+        n: BASE64URL_NOPAD.encode(&key.n().to_bytes_be()),
+        e: BASE64URL_NOPAD.encode(&key.e().to_bytes_be()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -83,9 +104,21 @@ async fn discovery(State(idp): State<Arc<Idp>>) -> Json<Value> {
 }
 
 async fn jwks(State(idp): State<Arc<Idp>>) -> Json<Value> {
-    Json(
-        json!({"keys": [{"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test-1", "n": idp.jwk_n, "e": idp.jwk_e}]}),
-    )
+    *idp.jwks_reads.lock().unwrap() += 1;
+    let signing = idp.signing.lock().unwrap();
+    Json(json!({"keys": [{
+        "kty": "RSA", "use": "sig", "alg": "RS256",
+        "kid": signing.kid, "n": signing.n, "e": signing.e,
+    }]}))
+}
+
+/// Publishes a new signing key and discards the old one, which is what a
+/// provider does on rotation.
+async fn rotate(State(idp): State<Arc<Idp>>) -> Json<Value> {
+    let mut signing = idp.signing.lock().unwrap();
+    let next = format!("{}-next", signing.kid);
+    *signing = generate_signing_key(&next);
+    Json(json!({"kid": signing.kid}))
 }
 
 async fn authorize(
@@ -169,24 +202,23 @@ async fn token(
             claims.as_object_mut().unwrap().remove("email_verified");
         }
     }
+    let signing = idp.signing.lock().unwrap();
     let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some("test-1".into());
-    let id_token = jsonwebtoken::encode(&header, &claims, &idp.signing_key).unwrap();
+    header.kid = Some(signing.kid.clone());
+    let id_token = jsonwebtoken::encode(&header, &claims, &signing.key).unwrap();
+    drop(signing);
     Json(json!({"access_token": "at-1", "token_type": "Bearer", "expires_in": 300, "id_token": id_token})).into_response()
 }
 
 async fn start_idp() -> Arc<Idp> {
-    let key = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
-    let pem = key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let idp = Arc::new(Idp {
         issuer: format!("http://{addr}"),
         client_id: "securesend".into(),
         client_secret: "x".repeat(24),
-        signing_key: EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap(),
-        jwk_n: BASE64URL_NOPAD.encode(&key.n().to_bytes_be()),
-        jwk_e: BASE64URL_NOPAD.encode(&key.e().to_bytes_be()),
+        signing: Mutex::new(generate_signing_key("test-1")),
+        jwks_reads: Mutex::new(0),
         next_email: Mutex::new("bob@acme.com".into()),
         next_email_verified: Mutex::new(Some(true)),
         codes: Mutex::new(HashMap::new()),
@@ -197,6 +229,7 @@ async fn start_idp() -> Arc<Idp> {
         .route("/jwks", get(jwks))
         .route("/authorize", get(authorize))
         .route("/token", post(token))
+        .route("/rotate", post(rotate))
         .with_state(idp.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     idp
@@ -712,6 +745,53 @@ async fn the_configured_claim_is_not_silently_swapped_for_another() {
     let c = client();
     sign_in(&app, &idp, &c, "alice@acme.com", "/").await;
     let v: Value = c
+        .get(format!("{}/v1/session", app.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["email"], "alice@acme.com");
+}
+
+/// A provider rotates its signing keys on its own schedule. Until the keys
+/// are fetched again every new sign-in fails, and restarting to recover also
+/// destroys every pending message, so the recovery has to happen in place.
+#[tokio::test]
+async fn a_rotated_signing_key_does_not_require_a_restart() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |_| {}).await;
+
+    let before = client();
+    sign_in(&app, &idp, &before, "alice@acme.com", "/").await;
+
+    let reads_before = *idp.jwks_reads.lock().unwrap();
+    reqwest::Client::new()
+        .post(format!("{}/rotate", idp.issuer))
+        .send()
+        .await
+        .unwrap();
+
+    // A token signed by the newly published key, with the same process running.
+    let after = client();
+    sign_in(&app, &idp, &after, "bob@acme.com", "/").await;
+    let v: Value = after
+        .get(format!("{}/v1/session", app.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["authenticated"], true);
+    assert_eq!(v["email"], "bob@acme.com");
+
+    // It recovered by fetching the key set again, not by chance.
+    assert!(*idp.jwks_reads.lock().unwrap() > reads_before);
+
+    // The session established before the rotation is untouched.
+    let v: Value = before
         .get(format!("{}/v1/session", app.base))
         .send()
         .await

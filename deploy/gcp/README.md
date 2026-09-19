@@ -15,7 +15,7 @@ gcloud run deploy securesend \
   --allow-unauthenticated \
   --set-env-vars "CYPHERA_SECURESEND__SERVER__HSTS=true,\
 CYPHERA_SECURESEND__SERVER__MANAGEMENT_BIND=127.0.0.1:9090,\
-CYPHERA_SECURESEND__SERVER__TRUSTED_HOPS=1,\
+CYPHERA_SECURESEND__SERVER__HSTS=true,\
 CYPHERA_SECURESEND__BRANDING__COMPANY_NAME=Acme"
 ```
 
@@ -23,16 +23,20 @@ Then set the public base URL to the URL the deploy printed and redeploy with
 `--update-env-vars CYPHERA_SECURESEND__SERVER__PUBLIC_BASE_URL=https://...`,
 or map a custom domain first and use that.
 
-Cloud Run terminates TLS and appends its own entry to `X-Forwarded-For`, and
-its front-end addresses are not published, so there is no network to name as
-trusted. `TRUSTED_HOPS=1` says instead that exactly one entry at the end of
-that header was added by infrastructure in front of this service, and the
-client is the entry before it. Trusting every address would have the opposite
-effect: the resolver would skip the whole chain and fall back to the platform
-proxy, putting every client in one rate-limit bucket.
+Cloud Run terminates TLS and forwards the client address in
+`X-Forwarded-For`, but the exact shape of that header has not been verified
+for this recipe, so it deliberately sets nothing. Without it, every request
+is attributed to the platform's own address, which means the per-address rate
+limits bound the whole service rather than each caller. The other limits are
+unaffected: the per-message failed-attempt limit and, in enterprise mode, the
+per-identity limits still apply.
 
-Set this only where the container cannot be reached directly. Anywhere a
-client can connect straight to it, a forged header would be believed.
+To fix that, find out how many proxies stand in front of your service and
+set `trusted_hops` to that number. A proxy appends the address it received
+from, so with one in front the client is the last entry of the header. Check
+it before trusting it: turn on `audit.include_client_ip`, make a request from
+a known address, and confirm the recorded address is yours and not the
+platform's. Never set it where the container can also be reached directly.
 
 Enterprise mode: store the client secret in Secret Manager and reference it:
 

@@ -48,12 +48,17 @@ pub struct ServerSettings {
     /// Networks whose `X-Forwarded-For` is trusted. Empty means the peer
     /// address is always the client address.
     pub trusted_proxies: Vec<IpNet>,
-    /// How many entries at the end of `X-Forwarded-For` were appended by
-    /// infrastructure you control, when that infrastructure's addresses are
-    /// not knowable in advance. One on a platform whose front end adds a
-    /// single entry. Mutually exclusive with `trusted_proxies`, because they
-    /// answer the same question in incompatible ways, and dangerous to set
-    /// anywhere the service can also be reached directly.
+    /// How many proxies stand between the client and this service, when
+    /// their addresses are not knowable in advance. A proxy appends the
+    /// address it received from, so with one in front the client is the last
+    /// entry in `X-Forwarded-For`, with two it is the second from the right,
+    /// and so on. Reading from the right is what makes it safe: anything the
+    /// client writes in front of itself shifts the chain without moving the
+    /// position read.
+    ///
+    /// Mutually exclusive with `trusted_proxies`, and unsafe anywhere the
+    /// service can also be reached directly, since then nothing appended the
+    /// entry being trusted.
     pub trusted_hops: u8,
     /// Emit `Strict-Transport-Security`. Enable only when the service is
     /// reached over HTTPS, in-process or via a proxy.

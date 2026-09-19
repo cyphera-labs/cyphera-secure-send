@@ -14,13 +14,22 @@ pub fn resolve(peer: SocketAddr, headers: &HeaderMap, trusted: &[IpNet], hops: u
     resolve_by_networks(peer, headers, trusted)
 }
 
-/// The entry immediately left of the ones our own infrastructure appended.
+/// A proxy appends the address it received the request *from*, so the one
+/// nearest the client appends the client, and each further proxy appends the
+/// one before it. With `hops` proxies in front, the client is therefore the
+/// entry `hops` places from the right end.
+///
+/// Counting from the right is what makes this safe: a client can prepend
+/// anything it likes, but every forged entry shifts the whole chain left
+/// without moving the position we read, so the answer never changes.
 fn resolve_by_hops(peer: SocketAddr, headers: &HeaderMap, hops: u8) -> IpAddr {
     let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) else {
         return peer.ip();
     };
     let chain: Vec<&str> = value.split(',').map(str::trim).collect();
-    let Some(index) = chain.len().checked_sub(usize::from(hops) + 1) else {
+    // Too short to hold what the configured number of proxies would have
+    // added, so it did not come the way the deployment says it does.
+    let Some(index) = chain.len().checked_sub(usize::from(hops)) else {
         return peer.ip();
     };
     chain
@@ -88,30 +97,47 @@ mod tests {
     }
 
     #[test]
-    fn counting_hops_reaches_past_a_platform_front_end() {
+    fn counting_hops_takes_the_entry_the_nearest_proxy_added() {
         let peer: SocketAddr = "169.254.1.1:1234".parse().unwrap();
-        // What a managed platform presents: the client, then its own entry.
-        let h = hdr("203.0.113.9, 169.254.8.8");
-        assert_eq!(
-            resolve(peer, &h, &[], 1),
-            "203.0.113.9".parse::<IpAddr>().unwrap()
-        );
-        // Two of ours in front.
-        let h = hdr("203.0.113.9, 169.254.8.8, 169.254.9.9");
-        assert_eq!(
-            resolve(peer, &h, &[], 2),
-            "203.0.113.9".parse::<IpAddr>().unwrap()
-        );
-        // A header too short to contain a client entry falls back to the peer,
-        // rather than treating our own front end as the client.
-        assert_eq!(resolve(peer, &hdr("169.254.8.8"), &[], 1), peer.ip());
+        let client = "203.0.113.9".parse::<IpAddr>().unwrap();
+
+        // One proxy in front: it appended the client, so the client is last.
+        assert_eq!(resolve(peer, &hdr("203.0.113.9"), &[], 1), client);
+
+        // Two in front: the nearer appended the client, the further appended
+        // the nearer, so the client is second from the right.
+        assert_eq!(resolve(peer, &hdr("203.0.113.9, 10.0.0.7"), &[], 2), client);
+
+        // A header shorter than the deployment describes did not arrive the
+        // way it claims, so the socket peer is the only honest answer.
+        assert_eq!(resolve(peer, &hdr("203.0.113.9"), &[], 2), peer.ip());
         assert_eq!(resolve(peer, &HeaderMap::new(), &[], 1), peer.ip());
-        // A forged entry to the left of ours cannot move the answer right.
-        let h = hdr("1.1.1.1, 203.0.113.9, 169.254.8.8");
-        assert_eq!(
-            resolve(peer, &h, &[], 1),
-            "203.0.113.9".parse::<IpAddr>().unwrap()
-        );
+    }
+
+    #[test]
+    fn a_forged_prefix_cannot_move_the_answer() {
+        let peer: SocketAddr = "169.254.1.1:1234".parse().unwrap();
+        let client = "203.0.113.9".parse::<IpAddr>().unwrap();
+
+        // Whatever the caller puts in front of itself, the proxy appends the
+        // real address after it, and that is the one read.
+        for forged in [
+            "198.51.100.1",
+            "198.51.100.2, 198.51.100.3",
+            "not-an-address",
+            "127.0.0.1, 10.0.0.1, 192.168.0.1",
+        ] {
+            let h = hdr(&format!("{forged}, 203.0.113.9"));
+            assert_eq!(
+                resolve(peer, &h, &[], 1),
+                client,
+                "a prefix of {forged:?} must not change the client"
+            );
+        }
+
+        // The same with a second proxy in front.
+        let h = hdr("198.51.100.1, 198.51.100.2, 203.0.113.9, 10.0.0.7");
+        assert_eq!(resolve(peer, &h, &[], 2), client);
     }
 
     #[test]

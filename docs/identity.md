@@ -75,7 +75,29 @@ add `email`. Work accounts then carry the user's address in the `email`
 claim. If your tenant cannot emit it, set `email_claim: preferred_username`,
 which is the user principal name.
 
-**4. Configure SecureSend.**
+**4. Decide what the address claim is worth.** Signing in proves control of
+an account; it does not by itself prove control of every address attached to
+that account, and the rules below authorize on the address. SecureSend
+therefore refuses a sign-in unless the token says the address is verified.
+
+Entra ID emits `email_verified` for some account types and not others. If
+your tenant does not emit it, and you are satisfied the directory is
+authoritative for the addresses it issues, say so explicitly:
+
+```yaml
+enterprise:
+  oidc:
+    email_claim: email
+    unverified_email: accept
+```
+
+That setting is a statement about your provider, not a switch for making
+sign-in work. A token that says the address is **not** verified is refused
+either way. Whichever you choose, restrict who can reach the application at
+the provider as well: the address claim is mutable, and the domain it ends
+with is not on its own proof that the account belongs to an employee.
+
+**5. Configure SecureSend.**
 
 ```yaml
 mode: enterprise
@@ -100,7 +122,7 @@ Use the tenant-specific issuer with your directory (tenant) id, not
 `common` or `organizations`: the issuer in the ID token must match the
 discovery document, and only the tenant-specific one does.
 
-**5. Start it.** SecureSend runs discovery against the issuer at startup and
+**6. Start it.** SecureSend runs discovery against the issuer at startup and
 refuses to start if the provider is unreachable or the configuration is
 inconsistent; the message names the problem.
 
@@ -165,14 +187,31 @@ and before it, so a reader who is not the named recipient gets the same
 "unavailable" answer as anyone else and the message stays intact for the
 right person.
 
+## Key rotation
+
+Providers rotate their signing keys, routinely and sometimes at short notice.
+When a token arrives signed by a key this service has not seen, it fetches
+the provider's key set again and checks the token once more, at most once a
+minute. No restart is needed, which matters here because restarting also
+discards every pending message.
+
 ## Revoking a sender
 
 Audit events carry the issuer and the subject alongside the address. The
 subject is the stable identifier; addresses change. To stop someone creating
 handoffs, disable or remove them at the identity provider, or drop them from
-whichever group or domain your configuration admits. Per-identity rate limits
-apply on top, keyed on the subject, so switching networks does not widen what
-one account can do.
+whichever group or domain your configuration admits.
+
+**A session already established keeps working.** Disabling an account at the
+provider prevents the next sign-in; it does not reach into sessions this
+service is already holding, which last `session_ttl_seconds`, eight hours by
+default. Shorten that lifetime if the gap matters to you. There is no remote
+sign-out yet, so the only immediate remedy is restarting the service, which
+ends every session and discards every pending message with them. Say which
+of those you are willing to do before you need to decide.
+
+Per-identity rate limits apply on top, keyed on the subject, so switching
+networks does not widen what one account can do.
 
 ## Other providers
 

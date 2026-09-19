@@ -8,7 +8,8 @@ use openidconnect::{
     EndpointSet, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier,
     RedirectUrl, Scope, TokenResponse,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, RwLock};
 use url::Url;
 
 use super::session::{CookieSpec, MemorySessionStore, PendingLogin, Session, SessionStore};
@@ -24,6 +25,15 @@ type Client = CoreClient<
     EndpointMaybeSet,
     EndpointMaybeSet,
 >;
+
+/// Everything needed to build the provider client again when its signing
+/// keys change.
+struct Rebuild {
+    issuer: IssuerUrl,
+    client_id: ClientId,
+    client_secret: ClientSecret,
+    redirect: RedirectUrl,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum OidcError {
@@ -51,8 +61,22 @@ pub enum OidcError {
     Session,
 }
 
+/// How often the provider's signing keys may be fetched again. Rotation is
+/// routine, so an unrecognised key must be recoverable; fetching on every
+/// failure would let a stream of bad tokens drive traffic at the provider.
+const MIN_KEY_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
 pub struct OidcProvider {
-    client: Client,
+    /// Replaced when the provider rotates its signing keys, which it will do
+    /// on its own schedule and sometimes without warning.
+    client: RwLock<Client>,
+    /// What it takes to build that client again.
+    rebuild: Rebuild,
+    /// When the keys were last fetched again, rather than when they were
+    /// first read at startup: a provider that rotates a minute after this
+    /// process started still has to be recoverable. Held across the fetch so
+    /// concurrent failures produce one request rather than a burst.
+    last_key_refresh: Mutex<Option<Instant>>,
     http: reqwest::Client,
     issuer: String,
     scopes: Vec<String>,
@@ -92,24 +116,23 @@ impl OidcProvider {
 
         let issuer = IssuerUrl::new(settings.issuer.clone())
             .map_err(|e| OidcError::Config(e.to_string()))?;
-        let metadata = CoreProviderMetadata::discover_async(issuer, &http)
-            .await
-            .map_err(|e| OidcError::Discovery(e.to_string()))?;
-
         let redirect = RedirectUrl::new(format!(
             "{}/auth/callback",
             public_base_url.trim_end_matches('/')
         ))
         .map_err(|e| OidcError::Config(e.to_string()))?;
-        let client = CoreClient::from_provider_metadata(
-            metadata,
-            ClientId::new(settings.client_id.clone()),
-            Some(ClientSecret::new(secret)),
-        )
-        .set_redirect_uri(redirect);
+        let rebuild = Rebuild {
+            issuer,
+            client_id: ClientId::new(settings.client_id.clone()),
+            client_secret: ClientSecret::new(secret),
+            redirect,
+        };
+        let client = build_client(&rebuild, &http).await?;
 
         Ok(Self {
-            client,
+            client: RwLock::new(client),
+            rebuild,
+            last_key_refresh: Mutex::new(None),
             http,
             issuer: settings.issuer.clone(),
             scopes: settings.scopes.clone(),
@@ -130,6 +153,65 @@ impl OidcProvider {
         &self.issuer
     }
 
+    /// Verifies the token against the keys currently held and reads the one
+    /// claim the operator nominated.
+    fn extract(
+        &self,
+        id_token: &openidconnect::core::CoreIdToken,
+        nonce: &Nonce,
+    ) -> Result<Claimed, OidcError> {
+        let client = self
+            .client
+            .try_read()
+            .map_err(|_| OidcError::IdToken("provider keys are being refreshed".to_owned()))?;
+        let claims = id_token
+            .claims(&client.id_token_verifier(), nonce)
+            .map_err(|e| OidcError::IdToken(e.to_string()))?;
+
+        // The configured claim, and only it. The account is identified by
+        // issuer and subject; the address is a separate assertion about that
+        // account, and authorization rests on it, so it is taken from the one
+        // place the operator nominated.
+        let address = match self.email_claim {
+            EmailClaim::Email => {
+                let verified = claims.email_verified();
+                if verified == Some(false)
+                    || (verified.is_none() && self.unverified_email == UnverifiedEmail::Refuse)
+                {
+                    return Err(OidcError::UnverifiedEmail);
+                }
+                claims.email().map(|e| e.as_str().to_owned())
+            }
+            EmailClaim::PreferredUsername => {
+                claims.preferred_username().map(|u| u.as_str().to_owned())
+            }
+        }
+        .ok_or(OidcError::NoEmail)?;
+
+        Ok(Claimed {
+            subject: claims.subject().as_str().to_owned(),
+            address,
+        })
+    }
+
+    /// Fetches the provider's keys again, at most once per interval, so a
+    /// rotation recovers on the next sign-in instead of on the next restart.
+    /// Restarting is a poor remedy here: it also discards every pending
+    /// message.
+    async fn refresh_keys(&self) -> Result<(), OidcError> {
+        let mut last = self.last_key_refresh.lock().await;
+        if last.is_some_and(|at| at.elapsed() < MIN_KEY_REFRESH_INTERVAL) {
+            return Err(OidcError::IdToken(
+                "signing key is not one the provider published, and its keys were fetched too recently to try again".to_owned(),
+            ));
+        }
+        let client = build_client(&self.rebuild, &self.http).await?;
+        *self.client.write().await = client;
+        *last = Some(Instant::now());
+        tracing::info!("refreshed the identity provider's signing keys");
+        Ok(())
+    }
+
     pub fn login_ttl(&self) -> Duration {
         self.login_ttl
     }
@@ -138,8 +220,8 @@ impl OidcProvider {
     /// the state value to bind to the browser through a cookie.
     pub async fn begin_login(&self, next: String) -> Result<(Url, String), OidcError> {
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-        let mut request = self
-            .client
+        let client = self.client.read().await;
+        let mut request = client
             .authorize_url(
                 CoreAuthenticationFlow::AuthorizationCode,
                 CsrfToken::new_random,
@@ -152,6 +234,7 @@ impl OidcProvider {
             }
         }
         let (url, state, nonce) = request.url();
+        drop(client);
         let state = state.secret().clone();
         self.sessions
             .start_login(
@@ -180,42 +263,39 @@ impl OidcProvider {
             .take_login(state)
             .await
             .ok_or(OidcError::UnknownState)?;
-        let token = self
-            .client
-            .exchange_code(AuthorizationCode::new(code.to_owned()))
-            .map_err(|e| OidcError::Exchange(e.to_string()))?
-            .set_pkce_verifier(PkceCodeVerifier::new(pending.pkce_verifier))
-            .request_async(&self.http)
-            .await
-            .map_err(|e| OidcError::Exchange(e.to_string()))?;
+        let token = {
+            let client = self.client.read().await;
+            client
+                .exchange_code(AuthorizationCode::new(code.to_owned()))
+                .map_err(|e| OidcError::Exchange(e.to_string()))?
+                .set_pkce_verifier(PkceCodeVerifier::new(pending.pkce_verifier))
+                .request_async(&self.http)
+                .await
+                .map_err(|e| OidcError::Exchange(e.to_string()))?
+        };
         let id_token = token.id_token().ok_or(OidcError::NoIdToken)?;
         let nonce = Nonce::new(pending.nonce);
-        let claims = id_token
-            .claims(&self.client.id_token_verifier(), &nonce)
-            .map_err(|e| OidcError::IdToken(e.to_string()))?;
+
+        // A provider rotates its signing keys on its own schedule, so a token
+        // signed by a key published after this process started is expected,
+        // not suspicious. Fetch the keys again and check it once more; every
+        // other part of the verification still has to pass.
+        let claimed = match self.extract(id_token, &nonce) {
+            Ok(claimed) => claimed,
+            Err(OidcError::IdToken(first)) => {
+                tracing::info!(
+                    reason = %first,
+                    "an ID token did not verify; refreshing the provider's keys and retrying once"
+                );
+                self.refresh_keys().await?;
+                self.extract(id_token, &nonce)?
+            }
+            Err(other) => return Err(other),
+        };
         let _ = token.access_token();
 
-        // The configured claim, and only it. The account is identified by
-        // issuer and subject; the address is a separate assertion about that
-        // account, and authorization rests on it, so it is taken from the one
-        // place the operator nominated.
-        let email_raw = match self.email_claim {
-            EmailClaim::Email => {
-                let verified = claims.email_verified();
-                if verified == Some(false)
-                    || (verified.is_none() && self.unverified_email == UnverifiedEmail::Refuse)
-                {
-                    return Err(OidcError::UnverifiedEmail);
-                }
-                claims.email().map(|e| e.as_str().to_owned())
-            }
-            EmailClaim::PreferredUsername => {
-                claims.preferred_username().map(|u| u.as_str().to_owned())
-            }
-        }
-        .ok_or(OidcError::NoEmail)?;
-        let email = Email::parse(&email_raw).map_err(|_| OidcError::BadEmail)?;
-        let subject = claims.subject().as_str().to_owned();
+        let email = Email::parse(&claimed.address).map_err(|_| OidcError::BadEmail)?;
+        let subject = claimed.subject;
 
         let (id, session) = self
             .sessions
@@ -224,6 +304,25 @@ impl OidcProvider {
             .map_err(|_| OidcError::Session)?;
         Ok((id, session, pending.next))
     }
+}
+
+async fn build_client(rebuild: &Rebuild, http: &reqwest::Client) -> Result<Client, OidcError> {
+    let metadata = CoreProviderMetadata::discover_async(rebuild.issuer.clone(), http)
+        .await
+        .map_err(|e| OidcError::Discovery(e.to_string()))?;
+    Ok(CoreClient::from_provider_metadata(
+        metadata,
+        rebuild.client_id.clone(),
+        Some(rebuild.client_secret.clone()),
+    )
+    .set_redirect_uri(rebuild.redirect.clone()))
+}
+
+/// What a verified ID token said, owned so the client lock is not held while
+/// the rest of the sign-in proceeds.
+struct Claimed {
+    subject: String,
+    address: String,
 }
 
 /// Where a completed sign-in may send the browser. The service has three

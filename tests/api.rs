@@ -470,6 +470,51 @@ async fn rate_limits_are_per_client_and_audited() {
     );
 }
 
+/// Counting hops must bound a client by the address its proxy recorded, not
+/// by anything the client wrote in front of it. Otherwise the per-address
+/// limit is decorative: send a different prefix each time and it never bites.
+#[tokio::test]
+async fn a_changing_forwarded_prefix_cannot_evade_the_rate_limit() {
+    let h = harness(|s| {
+        s.server.trusted_hops = 1;
+        s.rate_limits.consume_per_minute = 1;
+        s.audit.include_client_ip = true;
+    })
+    .await;
+    let path = "/v1/messages/abcdefghijklmnopqrstuvwxyz/consume";
+
+    let mut statuses = Vec::new();
+    for forged in ["198.51.100.1", "198.51.100.2", "198.51.100.3"] {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json")
+            // Whatever the caller claims, the proxy appended the real address.
+            .header("x-forwarded-for", format!("{forged}, 203.0.113.9"))
+            .body(Body::from(r#"{"proof":"x"}"#))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer("10.0.0.2")));
+        statuses.push(h.app.clone().oneshot(req).await.unwrap().status());
+    }
+
+    // The first is spent; the rest are the same client however it labels itself.
+    assert_eq!(statuses[0], StatusCode::NOT_FOUND);
+    assert_eq!(statuses[1], StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(statuses[2], StatusCode::TOO_MANY_REQUESTS);
+
+    // And the audit names the address the proxy recorded, never the prefix.
+    let addresses: Vec<String> = h
+        .audit
+        .events()
+        .into_iter()
+        .filter_map(|e| e.client_ip)
+        .collect();
+    assert!(!addresses.is_empty());
+    for address in addresses {
+        assert_eq!(address, "203.0.113.9");
+    }
+}
+
 #[tokio::test]
 async fn trusted_proxy_header_is_honored_only_from_trusted_peers() {
     let h = harness(|s| {

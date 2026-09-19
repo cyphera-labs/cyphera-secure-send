@@ -58,7 +58,12 @@ enterprise:                         # used when mode is enterprise
     # client_secret: set CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET, or:
     client_secret_file: null
     scopes: [openid, profile, email]
-    email_claim: email              # or preferred_username
+    email_claim: email              # or preferred_username; no fallback between them
+    # Signing in proves control of an account, not of every address on it.
+    # refuse: reject a sign-in unless the token says the address is verified.
+    # accept: your directory is authoritative for the addresses it issues but
+    #   does not send the claim. A token saying "not verified" is still refused.
+    unverified_email: refuse
     session_ttl_seconds: 28800
     login_ttl_seconds: 600
     trust_ca_path: null

@@ -42,7 +42,7 @@ response, not features.
 | `public_base_url` | unset | the URL users reach the service at; required in enterprise mode |
 | `management_bind` | `127.0.0.1:9090` | `/livez`, `/readyz`, `/metrics`. Keep it off the public network |
 | `trusted_proxies` | `[]` | CIDRs. `X-Forwarded-For` is honored only when the peer is inside one |
-| `trusted_hops` | `0` | how many entries at the end of `X-Forwarded-For` your own infrastructure appended, for a managed platform whose addresses are not published. Mutually exclusive with `trusted_proxies`, and unsafe anywhere the service can be reached directly |
+| `trusted_hops` | `0` | how many proxies stand in front, when their addresses are not knowable. A proxy appends the address it received from, so one in front means the client is the **last** entry of `X-Forwarded-For`, two means second from the right. Reading from the right is what makes it safe. Mutually exclusive with `trusted_proxies`, and unsafe anywhere the service can be reached directly. Verify it by turning on `audit.include_client_ip` and checking a request from a known address |
 | `hsts` | `false` | emit `Strict-Transport-Security`; enable once HTTPS is in place |
 | `shutdown_timeout_seconds` | `10` | drain time on SIGTERM |
 | `tls.cert_path`, `tls.key_path` | unset | set both to terminate TLS in-process (PEM) |
@@ -97,7 +97,8 @@ groups are deliberately separate.
 | `oidc.client_secret` | | set as `CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET`; never printed back |
 | `oidc.client_secret_file` | | alternative: a file containing the secret |
 | `oidc.scopes` | `[openid, profile, email]` | |
-| `oidc.email_claim` | `email` | or `preferred_username`; the other is the fallback |
+| `oidc.email_claim` | `email` | or `preferred_username`. There is no fallback between them: they mean different things |
+| `oidc.unverified_email` | `refuse` | what to do when the token does not say the address is verified. `accept` states that your directory is authoritative for its addresses; a token saying "not verified" is refused either way |
 | `oidc.session_ttl_seconds` | `28800` | |
 | `oidc.login_ttl_seconds` | `600` | how long a started login stays valid |
 | `oidc.trust_ca_path` | unset | PEM bundle of extra authorities for reaching the provider |
