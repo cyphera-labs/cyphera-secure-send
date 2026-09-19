@@ -172,7 +172,7 @@ the provenance, the image, and the chart.
 | | |
 |---|---|
 | **Tests** | Rust unit and HTTP tests, property-based tests on every parser that sees untrusted input, browser tests in Chromium including the double-read race |
-| **Static analysis** | Clippy with warnings denied, CodeQL for Rust and TypeScript, Semgrep, SonarQube quality gate with coverage from `cargo llvm-cov` and Vitest |
+| **Static analysis** | Clippy with warnings denied, CodeQL for Rust and TypeScript, Semgrep |
 | **Dependencies** | `cargo-deny` for advisories, licenses, and sources; `npm audit`; Dependabot weekly across Cargo, npm, Actions, and Docker; dependency review on pull requests |
 | **Secrets** | Trufflehog and Gitleaks over the full history on every push |
 | **Workflows** | Every action pinned to a commit SHA, `actionlint` on every change, least-privilege tokens, OpenSSF Scorecard weekly |

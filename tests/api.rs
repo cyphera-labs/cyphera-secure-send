@@ -24,7 +24,7 @@ struct Harness {
 
 async fn harness(tweak: impl FnOnce(&mut Settings)) -> Harness {
     let mut settings = Settings::default();
-    settings.messages.kdf.min_iterations = 1;
+    settings.messages.kdf.min_iterations = 1000;
     settings.audit.include_client_ip = true;
     tweak(&mut settings);
     settings.validate().unwrap();

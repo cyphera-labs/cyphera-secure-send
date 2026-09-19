@@ -27,7 +27,7 @@ struct Harness {
 
 async fn harness() -> Harness {
     let mut settings = Settings::default();
-    settings.messages.kdf.min_iterations = 1;
+    settings.messages.kdf.min_iterations = 1000;
     settings.messages.max_failed_proofs = 2;
     settings.validate().unwrap();
     let state = cyphera_secure_send::build_state(settings, Some(Arc::new(MemorySink::default())))

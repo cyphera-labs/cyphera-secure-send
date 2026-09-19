@@ -5,7 +5,7 @@
 
 use axum::extract::{Form, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Redirect};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use data_encoding::{BASE64_NOPAD, BASE64URL_NOPAD};
@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cyphera_secure_send::api::public_router;
 use cyphera_secure_send::audit::{MemorySink, Reason};
@@ -37,6 +38,13 @@ struct Idp {
     /// How many times the key set has been fetched, so a test can tell a
     /// refresh from a cached read.
     jwks_reads: Mutex<u32>,
+    /// Makes the key endpoint fail, as it does during a provider outage.
+    jwks_broken: Mutex<bool>,
+    /// Holds the key endpoint open, so concurrent sign-ins overlap on it.
+    jwks_delay: Mutex<Duration>,
+    /// Signs the next token with a nonce the service is not expecting, which
+    /// is a verification failure a key refresh cannot cure.
+    wrong_nonce: Mutex<bool>,
     /// The user the next login will produce.
     next_email: Mutex<String>,
     /// What the next token says about that address: Some(true), Some(false),
@@ -103,13 +111,21 @@ async fn discovery(State(idp): State<Arc<Idp>>) -> Json<Value> {
     }))
 }
 
-async fn jwks(State(idp): State<Arc<Idp>>) -> Json<Value> {
+async fn jwks(State(idp): State<Arc<Idp>>) -> Response {
     *idp.jwks_reads.lock().unwrap() += 1;
+    let delay = *idp.jwks_delay.lock().unwrap();
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+    if *idp.jwks_broken.lock().unwrap() {
+        return (StatusCode::SERVICE_UNAVAILABLE, "key endpoint is down").into_response();
+    }
     let signing = idp.signing.lock().unwrap();
     Json(json!({"keys": [{
         "kty": "RSA", "use": "sig", "alg": "RS256",
         "kid": signing.kid, "n": signing.n, "e": signing.e,
     }]}))
+    .into_response()
 }
 
 /// Publishes a new signing key and discards the old one, which is what a
@@ -192,7 +208,7 @@ async fn token(
         "aud": idp.client_id,
         "exp": now + 300,
         "iat": now,
-        "nonce": nonce,
+        "nonce": if *idp.wrong_nonce.lock().unwrap() { "not-the-nonce-that-was-sent".to_owned() } else { nonce },
         "email": email,
         "preferred_username": email,
     });
@@ -219,6 +235,9 @@ async fn start_idp() -> Arc<Idp> {
         client_secret: "x".repeat(24),
         signing: Mutex::new(generate_signing_key("test-1")),
         jwks_reads: Mutex::new(0),
+        jwks_broken: Mutex::new(false),
+        jwks_delay: Mutex::new(Duration::ZERO),
+        wrong_nonce: Mutex::new(false),
         next_email: Mutex::new("bob@acme.com".into()),
         next_email_verified: Mutex::new(Some(true)),
         codes: Mutex::new(HashMap::new()),
@@ -253,7 +272,7 @@ async fn start_app(idp: &Idp, tweak: impl FnOnce(&mut Settings)) -> App {
     settings.enterprise.oidc.client_id = idp.client_id.clone();
     settings.enterprise.oidc.client_secret = Some(idp.client_secret.clone());
     settings.enterprise.creation.allowed_domains = vec!["acme.com".into()];
-    settings.messages.kdf.min_iterations = 1;
+    settings.messages.kdf.min_iterations = 1000;
     settings.rate_limits.consume_per_minute = 200;
     settings.rate_limits.create_per_minute = 200;
     tweak(&mut settings);
@@ -277,6 +296,21 @@ fn client() -> reqwest::Client {
 
 /// Walks the browser through login: app → provider → app callback. Returns
 /// the final redirect target.
+/// Runs a sign-in as far as the provider's redirect back, and returns the
+/// callback URL without following it. Lets a test hold several in flight.
+async fn prepare_login(app: &App, idp: &Idp, c: &reqwest::Client, email: &str) -> String {
+    *idp.next_email.lock().unwrap() = email.to_owned();
+    *idp.next_email_verified.lock().unwrap() = Some(true);
+    let r = c
+        .get(format!("{}/auth/login?next=/", app.base))
+        .send()
+        .await
+        .unwrap();
+    let to_idp = r.headers()["location"].to_str().unwrap().to_owned();
+    let r = c.get(&to_idp).send().await.unwrap();
+    r.headers()["location"].to_str().unwrap().to_owned()
+}
+
 async fn sign_in(app: &App, idp: &Idp, c: &reqwest::Client, email: &str, next: &str) -> String {
     *idp.next_email.lock().unwrap() = email.to_owned();
     *idp.next_email_verified.lock().unwrap() = Some(true);
@@ -800,6 +834,143 @@ async fn a_rotated_signing_key_does_not_require_a_restart() {
         .await
         .unwrap();
     assert_eq!(v["email"], "alice@acme.com");
+}
+
+/// Several people signing in at the moment a provider rotates must all get
+/// in. One of them fetches the new keys; the others were waiting on that
+/// fetch, and being told "too soon to fetch again" is not a reason to reject
+/// a token the service can now verify.
+#[tokio::test]
+async fn concurrent_logins_across_a_rotation_all_succeed() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |_| {}).await;
+
+    // Several sign-ins reach the callback while the old key is still current.
+    let clients: Vec<reqwest::Client> = (0..6).map(|_| client()).collect();
+    let mut callbacks = Vec::new();
+    for c in &clients {
+        callbacks.push(prepare_login(&app, &idp, c, "alice@acme.com").await);
+    }
+
+    // The provider rotates, and its key endpoint is slow enough that the
+    // callbacks genuinely overlap on it.
+    reqwest::Client::new()
+        .post(format!("{}/rotate", idp.issuer))
+        .send()
+        .await
+        .unwrap();
+    *idp.jwks_delay.lock().unwrap() = Duration::from_millis(600);
+    let reads_before = *idp.jwks_reads.lock().unwrap();
+
+    let mut inflight = Vec::new();
+    for (c, back) in clients.iter().cloned().zip(callbacks.clone()) {
+        inflight.push(tokio::spawn(async move {
+            c.get(&back).send().await.unwrap().status()
+        }));
+    }
+    let mut statuses = Vec::new();
+    for handle in inflight {
+        statuses.push(handle.await.unwrap());
+    }
+
+    assert!(
+        statuses.iter().all(|s| *s == StatusCode::SEE_OTHER),
+        "every concurrent sign-in should succeed, got {statuses:?}"
+    );
+
+    // And they shared one fetch rather than each making their own.
+    let fetches = *idp.jwks_reads.lock().unwrap() - reads_before;
+    assert_eq!(
+        fetches, 1,
+        "the key set should be fetched once, not per caller"
+    );
+
+    for c in &clients {
+        let v: Value = c
+            .get(format!("{}/v1/session", app.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(v["authenticated"], true);
+    }
+}
+
+/// A provider whose key endpoint is failing must be asked again at the stated
+/// interval, not once per arriving sign-in.
+#[tokio::test]
+async fn a_failing_key_endpoint_is_not_hammered() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |_| {}).await;
+
+    reqwest::Client::new()
+        .post(format!("{}/rotate", idp.issuer))
+        .send()
+        .await
+        .unwrap();
+    *idp.jwks_broken.lock().unwrap() = true;
+    let reads_before = *idp.jwks_reads.lock().unwrap();
+
+    for _ in 0..4 {
+        let c = client();
+        let back = prepare_login(&app, &idp, &c, "alice@acme.com").await;
+        let r = c.get(&back).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "must fail closed");
+    }
+
+    let fetches = *idp.jwks_reads.lock().unwrap() - reads_before;
+    assert_eq!(
+        fetches, 1,
+        "a failing endpoint should be tried once per interval, not {fetches} times"
+    );
+
+    // The outage is still in force; recovery is a matter of waiting, not of
+    // restarting the process and losing every pending message with it.
+    assert!(*idp.jwks_broken.lock().unwrap());
+}
+
+/// A token that fails for a reason no key could fix must not spend the one
+/// fetch a real rotation will need.
+#[tokio::test]
+async fn an_unrelated_token_failure_does_not_spend_the_key_refresh() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |_| {}).await;
+    let reads_before = *idp.jwks_reads.lock().unwrap();
+
+    // A correctly signed token carrying the wrong nonce.
+    *idp.wrong_nonce.lock().unwrap() = true;
+    let bad = client();
+    let back = prepare_login(&app, &idp, &bad, "mallory@acme.com").await;
+    assert_eq!(
+        bad.get(&back).send().await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    *idp.wrong_nonce.lock().unwrap() = false;
+    assert_eq!(
+        *idp.jwks_reads.lock().unwrap(),
+        reads_before,
+        "a nonce failure is not a key problem and must not fetch keys"
+    );
+
+    // The provider then rotates for real, and the next sign-in still recovers.
+    reqwest::Client::new()
+        .post(format!("{}/rotate", idp.issuer))
+        .send()
+        .await
+        .unwrap();
+    let good = client();
+    sign_in(&app, &idp, &good, "alice@acme.com", "/").await;
+    let v: Value = good
+        .get(format!("{}/v1/session", app.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["authenticated"], true);
 }
 
 #[tokio::test]

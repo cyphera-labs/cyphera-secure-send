@@ -2,6 +2,7 @@
 //! with PKCE, state, and nonce, ID token verification, and the mapping from
 //! claims to a session. Tokens never reach the browser.
 
+use openidconnect::ClaimsVerificationError;
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
 use openidconnect::{
     AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet,
@@ -16,6 +17,7 @@ use super::session::{CookieSpec, MemorySessionStore, PendingLogin, Session, Sess
 use crate::config::{EmailClaim, OidcSettings, UnverifiedEmail};
 use crate::domain::{Email, MessageId};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 type Client = CoreClient<
     EndpointSet,
@@ -51,6 +53,11 @@ pub enum OidcError {
     NoIdToken,
     #[error("ID token rejected: {0}")]
     IdToken(String),
+    /// The signature did not check out against the keys held. A rotation
+    /// looks exactly like this, so it is the only failure worth fetching the
+    /// provider's keys for; a bad nonce or audience is not.
+    #[error("ID token signature rejected: {0}")]
+    IdTokenSignature(String),
     #[error("the ID token carries no usable email claim")]
     NoEmail,
     #[error("the ID token does not say the address has been verified")]
@@ -68,15 +75,22 @@ const MIN_KEY_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct OidcProvider {
     /// Replaced when the provider rotates its signing keys, which it will do
-    /// on its own schedule and sometimes without warning.
-    client: RwLock<Client>,
+    /// on its own schedule and sometimes without warning. Held as a shared
+    /// pointer so a sign-in can take a snapshot and let go of the lock before
+    /// making any network request.
+    client: RwLock<Arc<Client>>,
+    /// Bumped whenever the keys are replaced. A caller that failed against
+    /// generation N and finds N+1 waiting has nothing to fetch: someone else
+    /// already did it, and the right move is to check the token again.
+    key_generation: AtomicU64,
     /// What it takes to build that client again.
     rebuild: Rebuild,
-    /// When the keys were last fetched again, rather than when they were
-    /// first read at startup: a provider that rotates a minute after this
-    /// process started still has to be recoverable. Held across the fetch so
-    /// concurrent failures produce one request rather than a burst.
-    last_key_refresh: Mutex<Option<Instant>>,
+    /// When a fetch was last *attempted*, successfully or not, rather than
+    /// when the keys were first read at startup: a provider that rotates a
+    /// minute after this process started still has to be recoverable, and a
+    /// provider whose key endpoint is failing must not be hammered. Held
+    /// across the fetch so concurrent failures produce one request.
+    last_refresh_attempt: Mutex<Option<Instant>>,
     http: reqwest::Client,
     issuer: String,
     scopes: Vec<String>,
@@ -130,9 +144,10 @@ impl OidcProvider {
         let client = build_client(&rebuild, &http).await?;
 
         Ok(Self {
-            client: RwLock::new(client),
+            client: RwLock::new(Arc::new(client)),
+            key_generation: AtomicU64::new(0),
             rebuild,
-            last_key_refresh: Mutex::new(None),
+            last_refresh_attempt: Mutex::new(None),
             http,
             issuer: settings.issuer.clone(),
             scopes: settings.scopes.clone(),
@@ -153,20 +168,28 @@ impl OidcProvider {
         &self.issuer
     }
 
-    /// Verifies the token against the keys currently held and reads the one
+    /// The keys in force right now, and which generation they are.
+    async fn snapshot(&self) -> (Arc<Client>, u64) {
+        let client = self.client.read().await.clone();
+        (client, self.key_generation.load(Ordering::Acquire))
+    }
+
+    /// Verifies the token against one snapshot of the keys and reads the one
     /// claim the operator nominated.
     fn extract(
         &self,
+        client: &Client,
         id_token: &openidconnect::core::CoreIdToken,
         nonce: &Nonce,
     ) -> Result<Claimed, OidcError> {
-        let client = self
-            .client
-            .try_read()
-            .map_err(|_| OidcError::IdToken("provider keys are being refreshed".to_owned()))?;
         let claims = id_token
             .claims(&client.id_token_verifier(), nonce)
-            .map_err(|e| OidcError::IdToken(e.to_string()))?;
+            .map_err(|e| match e {
+                ClaimsVerificationError::SignatureVerification(_) => {
+                    OidcError::IdTokenSignature(e.to_string())
+                }
+                other => OidcError::IdToken(other.to_string()),
+            })?;
 
         // The configured claim, and only it. The account is identified by
         // issuer and subject; the address is a separate assertion about that
@@ -194,20 +217,30 @@ impl OidcProvider {
         })
     }
 
-    /// Fetches the provider's keys again, at most once per interval, so a
-    /// rotation recovers on the next sign-in instead of on the next restart.
-    /// Restarting is a poor remedy here: it also discards every pending
-    /// message.
-    async fn refresh_keys(&self) -> Result<(), OidcError> {
-        let mut last = self.last_key_refresh.lock().await;
-        if last.is_some_and(|at| at.elapsed() < MIN_KEY_REFRESH_INTERVAL) {
+    /// Brings the keys up to date for a caller that failed against
+    /// `seen`. Returns once the keys in force are newer than that, whether
+    /// this caller fetched them or another already had. Restarting is a poor
+    /// remedy here: it also discards every pending message.
+    async fn refresh_keys(&self, seen: u64) -> Result<(), OidcError> {
+        let mut attempted = self.last_refresh_attempt.lock().await;
+
+        // Someone refreshed while this caller was queueing. Nothing to fetch;
+        // the caller simply checks its token again against what is now held.
+        if self.key_generation.load(Ordering::Acquire) != seen {
+            return Ok(());
+        }
+        if attempted.is_some_and(|at| at.elapsed() < MIN_KEY_REFRESH_INTERVAL) {
             return Err(OidcError::IdToken(
                 "signing key is not one the provider published, and its keys were fetched too recently to try again".to_owned(),
             ));
         }
+
+        // Recorded before the request, so an endpoint that is failing is tried
+        // once per interval rather than once per arriving sign-in.
+        *attempted = Some(Instant::now());
         let client = build_client(&self.rebuild, &self.http).await?;
-        *self.client.write().await = client;
-        *last = Some(Instant::now());
+        *self.client.write().await = Arc::new(client);
+        self.key_generation.fetch_add(1, Ordering::Release);
         tracing::info!("refreshed the identity provider's signing keys");
         Ok(())
     }
@@ -220,7 +253,7 @@ impl OidcProvider {
     /// the state value to bind to the browser through a cookie.
     pub async fn begin_login(&self, next: String) -> Result<(Url, String), OidcError> {
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-        let client = self.client.read().await;
+        let (client, _) = self.snapshot().await;
         let mut request = client
             .authorize_url(
                 CoreAuthenticationFlow::AuthorizationCode,
@@ -234,7 +267,6 @@ impl OidcProvider {
             }
         }
         let (url, state, nonce) = request.url();
-        drop(client);
         let state = state.secret().clone();
         self.sessions
             .start_login(
@@ -263,8 +295,8 @@ impl OidcProvider {
             .take_login(state)
             .await
             .ok_or(OidcError::UnknownState)?;
+        let (client, generation) = self.snapshot().await;
         let token = {
-            let client = self.client.read().await;
             client
                 .exchange_code(AuthorizationCode::new(code.to_owned()))
                 .map_err(|e| OidcError::Exchange(e.to_string()))?
@@ -280,15 +312,18 @@ impl OidcProvider {
         // signed by a key published after this process started is expected,
         // not suspicious. Fetch the keys again and check it once more; every
         // other part of the verification still has to pass.
-        let claimed = match self.extract(id_token, &nonce) {
+        let claimed = match self.extract(&client, id_token, &nonce) {
             Ok(claimed) => claimed,
-            Err(OidcError::IdToken(first)) => {
+            Err(OidcError::IdTokenSignature(first)) => {
                 tracing::info!(
                     reason = %first,
-                    "an ID token did not verify; refreshing the provider's keys and retrying once"
+                    "an ID token was not signed by a key held; bringing the provider's keys up to date"
                 );
-                self.refresh_keys().await?;
-                self.extract(id_token, &nonce)?
+                self.refresh_keys(generation).await?;
+                let (client, _) = self.snapshot().await;
+                // Checked again in full: the fresh keys change which
+                // signatures are acceptable and nothing else.
+                self.extract(&client, id_token, &nonce)?
             }
             Err(other) => return Err(other),
         };

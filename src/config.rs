@@ -539,6 +539,18 @@ impl Settings {
                 "messages.kdf iteration bounds are inconsistent".into(),
             ));
         }
+        // The interface refuses to derive outside this range, so accepting
+        // bounds beyond it would store messages no browser would open and
+        // advertise a work factor the page will not use.
+        const INTERFACE_MIN_ITERATIONS: u32 = 1_000;
+        const INTERFACE_MAX_ITERATIONS: u32 = 10_000_000;
+        if k.min_iterations < INTERFACE_MIN_ITERATIONS
+            || k.max_iterations > INTERFACE_MAX_ITERATIONS
+        {
+            return Err(ConfigError::Invalid(format!(
+                "messages.kdf bounds must stay within {INTERFACE_MIN_ITERATIONS} to {INTERFACE_MAX_ITERATIONS}, which is what the interface will derive"
+            )));
+        }
         if k.recommended_iterations < k.min_iterations
             || k.recommended_iterations > k.max_iterations
         {
@@ -818,6 +830,24 @@ mod tests {
         s.enterprise.oidc.client_secret = Some("hunter2".into());
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("hunter2"));
+    }
+
+    #[test]
+    fn work_factor_bounds_stay_within_what_the_interface_derives() {
+        let mut s = Settings::default();
+        s.messages.kdf.max_iterations = 10_000_001;
+        s.messages.kdf.recommended_iterations = 10_000_001;
+        assert!(s.validate().is_err(), "above the interface maximum");
+
+        let mut s = Settings::default();
+        s.messages.kdf.min_iterations = 1;
+        s.messages.kdf.recommended_iterations = 1;
+        assert!(s.validate().is_err(), "below the interface minimum");
+
+        let mut s = Settings::default();
+        s.messages.kdf.min_iterations = 1_000;
+        s.messages.kdf.max_iterations = 10_000_000;
+        s.validate().unwrap();
     }
 
     #[test]
