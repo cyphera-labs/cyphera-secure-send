@@ -21,7 +21,8 @@ export interface UiConfig {
   ttl_options_seconds: number[];
   default_ttl_seconds: number;
   max_plaintext_bytes: number;
-  kdf_iterations: number;
+  /** What to derive keys with, and how hard. The name is the wire name. */
+  kdf: { name: string; iterations: number };
   max_failed_proofs: number;
   mode: "standard" | "enterprise";
   creation_requires_sign_in: boolean;

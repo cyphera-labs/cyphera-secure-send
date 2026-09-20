@@ -38,9 +38,7 @@ impl StoredMessage {
     /// payload for a small message; under-counting it lets the store exceed
     /// the container's memory before its own budget.
     pub fn weight(&self) -> u32 {
-        let bytes = self.envelope.ciphertext.len()
-            + self.envelope.salt.len()
-            + self.envelope.iv.len()
+        let bytes = self.envelope.resident_bytes()
             + self.sender.as_str().len()
             + self.recipient.as_str().len()
             + 1024;

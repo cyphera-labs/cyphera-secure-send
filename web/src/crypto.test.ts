@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { base64, base64url } from "./encoding";
-import { decodeFragment, encodeFragment, open, proofFor, seal, sha256, suggestPassword } from "./crypto";
+import { KDF_NAME, decodeFragment, encodeFragment, open, proofFor, seal, sha256, suggestPassword } from "./crypto";
 
 const ITER = 1000;
 
@@ -22,7 +22,7 @@ describe("encoding", () => {
 
 describe("seal and open", () => {
   it("round-trips with the right password and link secret", async () => {
-    const sealed = await seal("hunter2 is not a password", "correct horse", ITER);
+    const sealed = await seal("hunter2 is not a password", "correct horse", { name: KDF_NAME, iterations: ITER });
     expect(sealed.envelope.version).toBe(1);
     expect(sealed.envelope.kdf.name).toBe("PBKDF2-SHA256");
     expect(sealed.envelope.cipher.name).toBe("AES-256-GCM");
@@ -33,7 +33,7 @@ describe("seal and open", () => {
   });
 
   it("fails with the wrong password, wrong link secret, or tampered ciphertext", async () => {
-    const sealed = await seal("secret", "pw", ITER);
+    const sealed = await seal("secret", "pw", { name: KDF_NAME, iterations: ITER });
     await expect(open(sealed.envelope, "pW", sealed.linkSecret)).rejects.toBeDefined();
     const other = base64url.encode(new Uint8Array(32).fill(7));
     await expect(open(sealed.envelope, "pw", other)).rejects.toBeDefined();
@@ -43,7 +43,7 @@ describe("seal and open", () => {
   });
 
   it("derives a proof whose hash equals the verifier", async () => {
-    const sealed = await seal("secret", "pw", ITER);
+    const sealed = await seal("secret", "pw", { name: KDF_NAME, iterations: ITER });
     const proof = await proofFor(sealed.envelope, "pw", sealed.linkSecret);
     const digest = await sha256(base64url.decode(proof));
     expect(base64url.encode(digest)).toBe(sealed.verifier);
@@ -52,7 +52,7 @@ describe("seal and open", () => {
   });
 
   it("does not put the link secret anywhere in the envelope", async () => {
-    const sealed = await seal("secret", "pw", ITER);
+    const sealed = await seal("secret", "pw", { name: KDF_NAME, iterations: ITER });
     const json = JSON.stringify(sealed.envelope) + sealed.verifier;
     expect(json).not.toContain(sealed.linkSecret);
     expect(json).not.toContain("secret");
@@ -60,14 +60,14 @@ describe("seal and open", () => {
   });
 
   it("refuses unsupported envelope versions", async () => {
-    const sealed = await seal("secret", "pw", ITER);
+    const sealed = await seal("secret", "pw", { name: KDF_NAME, iterations: ITER });
     await expect(open({ ...sealed.envelope, version: 2 }, "pw", sealed.linkSecret)).rejects.toThrow(/version/);
   });
 });
 
 describe("fragment", () => {
   it("round-trips link params", async () => {
-    const sealed = await seal("secret", "pw", 600000);
+    const sealed = await seal("secret", "pw", { name: KDF_NAME, iterations: 600000 });
     const fragment = encodeFragment({ linkSecret: sealed.linkSecret, salt: sealed.envelope.kdf.salt, iterations: 600000 });
     expect(fragment).not.toContain("+");
     expect(fragment).not.toContain("/");
@@ -114,5 +114,11 @@ describe("suggestPassword", () => {
       const n = counts.get(c) ?? 0;
       expect(Math.abs(n - expected) / expected).toBeLessThan(0.08);
     }
+  });
+});
+
+describe("algorithm negotiation", () => {
+  it("refuses to seal with an algorithm this page does not know", async () => {
+    await expect(seal("secret", "pw", { name: "argon2id", iterations: 3 })).rejects.toThrow(/cannot derive keys with argon2id/);
   });
 });

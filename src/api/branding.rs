@@ -98,6 +98,12 @@ pub async fn favicon(State(state): State<SharedState>) -> Response {
 }
 
 #[derive(Serialize)]
+pub struct KdfAdvertised {
+    pub name: &'static str,
+    pub iterations: u32,
+}
+
+#[derive(Serialize)]
 pub struct UiConfig {
     pub product_name: String,
     pub company_name: String,
@@ -111,7 +117,9 @@ pub struct UiConfig {
     pub ttl_options_seconds: Vec<u64>,
     pub default_ttl_seconds: u64,
     pub max_plaintext_bytes: usize,
-    pub kdf_iterations: u32,
+    /// What the interface derives keys with, and how hard: the algorithm by
+    /// its wire name, and its work factor.
+    pub kdf: KdfAdvertised,
     pub max_failed_proofs: u32,
     pub mode: crate::config::Mode,
     /// What the interface must ask of a visitor. Derived from the access
@@ -140,7 +148,10 @@ pub async fn ui_config(State(state): State<SharedState>) -> Json<UiConfig> {
         ttl_options_seconds: s.messages.ttl_options_seconds.clone(),
         default_ttl_seconds: s.messages.default_ttl_seconds,
         max_plaintext_bytes: s.messages.max_plaintext_bytes,
-        kdf_iterations: s.messages.kdf.recommended_iterations,
+        kdf: KdfAdvertised {
+            name: s.messages.kdf.algorithm.wire_name(),
+            iterations: s.messages.kdf.recommended_iterations,
+        },
         max_failed_proofs: s.messages.max_failed_proofs,
         mode: s.mode,
         creation_requires_sign_in: s.mode == crate::config::Mode::Enterprise

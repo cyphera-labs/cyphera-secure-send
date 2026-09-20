@@ -1,7 +1,7 @@
 //! Property-based tests for the parsers that face untrusted input. None of
 //! them may panic, and their acceptance must be stable under re-parsing.
 
-use cyphera_secure_send::domain::envelope::{CipherWire, EnvelopeWire, KdfWire};
+use cyphera_secure_send::domain::envelope::{CipherWire, EnvelopeWire, KdfAlgorithm, KdfWire};
 use cyphera_secure_send::domain::ids::Secret;
 use cyphera_secure_send::domain::{Email, Envelope, EnvelopeLimits, MessageId, Verifier};
 use proptest::prelude::*;
@@ -68,7 +68,7 @@ proptest! {
             cipher: CipherWire { name: cipher_name, iv },
             ciphertext,
         };
-        let limits = EnvelopeLimits { max_plaintext_bytes: 64, min_iterations: 1000, max_iterations: 10_000 };
+        let limits = EnvelopeLimits { max_plaintext_bytes: 64, kdf: KdfAlgorithm::Pbkdf2Sha256, min_iterations: 1000, max_iterations: 10_000 };
         let _ = Envelope::validate(&wire, &limits);
     }
 
@@ -79,7 +79,7 @@ proptest! {
         iv in proptest::array::uniform12(any::<u8>()),
         ciphertext in proptest::collection::vec(any::<u8>(), 16..=80),
     ) {
-        let limits = EnvelopeLimits { max_plaintext_bytes: 64, min_iterations: 1000, max_iterations: 10_000 };
+        let limits = EnvelopeLimits { max_plaintext_bytes: 64, kdf: KdfAlgorithm::Pbkdf2Sha256, min_iterations: 1000, max_iterations: 10_000 };
         let wire = EnvelopeWire {
             version: 1,
             kdf: KdfWire { name: "PBKDF2-SHA256".into(), iterations, salt: data_encoding::BASE64_NOPAD.encode(&salt) },
@@ -90,7 +90,7 @@ proptest! {
         prop_assert_eq!(&env.ciphertext, &ciphertext);
         let back = Envelope::validate(&env.to_wire(), &limits).unwrap();
         prop_assert_eq!(back.ciphertext, ciphertext);
-        prop_assert_eq!(back.salt, salt.to_vec());
-        prop_assert_eq!(back.iv, iv.to_vec());
+        prop_assert_eq!(back.kdf.salt(), salt.as_slice());
+        prop_assert_eq!(back.cipher.iv(), iv.as_slice());
     }
 }

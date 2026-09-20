@@ -30,10 +30,11 @@ messages:
   min_ttl_seconds: 60
   max_ttl_seconds: 86400
   max_plaintext_bytes: 65536
-  memory_budget_bytes: 268435456    # 256 MiB of ciphertext before eviction
+  memory_budget_bytes: 268435456    # 256 MiB; a message that does not fit is refused, nothing is evicted
   max_failed_proofs: 5              # wrong passwords before the message is destroyed
   kdf:
-    recommended_iterations: 600000
+    algorithm: pbkdf2-sha256        # the one the interface derives with; the only one the API accepts
+    recommended_iterations: 600000  # the work factor; higher is slower to guess and slower to open
     min_iterations: 100000
     max_iterations: 5000000
 

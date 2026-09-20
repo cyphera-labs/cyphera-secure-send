@@ -223,7 +223,7 @@ function compose(): void {
     }
     busy(submit, true, "Encrypting…");
     try {
-      const sealed = await seal(message.value, password.value, config.kdf_iterations);
+      const sealed = await seal(message.value, password.value, config.kdf);
       busy(submit, true, "Creating link…");
       const created = await api.create({
         sender: sender.value.trim(),
@@ -232,7 +232,7 @@ function compose(): void {
         verifier: sealed.verifier,
         envelope: sealed.envelope,
       });
-      const fragment = encodeFragment({ linkSecret: sealed.linkSecret, salt: sealed.envelope.kdf.salt, iterations: config.kdf_iterations });
+      const fragment = encodeFragment({ linkSecret: sealed.linkSecret, salt: sealed.envelope.kdf.salt, iterations: sealed.envelope.kdf.iterations });
       const link = `${location.origin}/m/${created.id}#${fragment}`;
       const revokeLink = `${location.origin}/r/${created.id}#${created.revoke_token}`;
       message.value = "";

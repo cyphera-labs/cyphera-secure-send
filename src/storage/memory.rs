@@ -255,6 +255,7 @@ impl MessageStore for MemoryStore {
 mod tests {
     use super::*;
     use crate::audit::MemorySink;
+    use crate::domain::envelope::{Cipher, Kdf};
     use crate::domain::ids::Secret;
     use crate::domain::{Email, Envelope};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -270,9 +271,12 @@ mod tests {
             sender_authenticated: false,
             recipient: Email::parse("b@example.com").unwrap(),
             envelope: Envelope {
-                iterations: 100_000,
-                salt: vec![1; 16],
-                iv: vec![2; 12],
+                version: 1,
+                kdf: Kdf::Pbkdf2Sha256 {
+                    iterations: 100_000,
+                    salt: vec![1; 16],
+                },
+                cipher: Cipher::Aes256Gcm { iv: vec![2; 12] },
                 ciphertext: vec![3; 48],
             },
             verifier: proof.hash(),

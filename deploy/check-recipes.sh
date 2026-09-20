@@ -91,6 +91,7 @@ for name in "${names[@]}"; do
     *ISSUER) value="https://idp.example.com" ;;
     *__MODE) value="standard" ;;
     *EMAIL_CLAIM) value="email" ;;
+    *KDF__ALGORITHM) value="pbkdf2-sha256" ;;
     *__SINK) value="stdout" ;;
     *BACKEND) value="memory" ;;
     *COLORS__*) value="#0057b8" ;;

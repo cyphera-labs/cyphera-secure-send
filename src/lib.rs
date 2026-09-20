@@ -83,6 +83,7 @@ pub async fn build_state(
         max_ttl_seconds: settings.messages.max_ttl_seconds,
         envelope: EnvelopeLimits {
             max_plaintext_bytes: settings.messages.max_plaintext_bytes,
+            kdf: settings.messages.kdf.algorithm,
             min_iterations: settings.messages.kdf.min_iterations,
             max_iterations: settings.messages.kdf.max_iterations,
         },

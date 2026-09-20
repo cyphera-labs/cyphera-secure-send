@@ -1,6 +1,7 @@
 //! Configuration: defaults, then an optional YAML file, then environment
 //! variables. Every key can be set as `CYPHERA_SECURESEND__SECTION__KEY`.
 
+use crate::domain::envelope::KdfAlgorithm;
 use ipnet::IpNet;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
@@ -141,6 +142,9 @@ pub struct MessageSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KdfSettings {
+    /// The password-stretching algorithm the interface uses. One choice
+    /// today; a second is a new variant with bounds of its own.
+    pub algorithm: KdfAlgorithm,
     /// What the interface uses when creating a message.
     pub recommended_iterations: u32,
     /// Bounds enforced on what the API will store.
@@ -403,6 +407,7 @@ impl Default for MessageSettings {
 impl Default for KdfSettings {
     fn default() -> Self {
         Self {
+            algorithm: KdfAlgorithm::Pbkdf2Sha256,
             recommended_iterations: 600_000,
             min_iterations: 100_000,
             max_iterations: 5_000_000,

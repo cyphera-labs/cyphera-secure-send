@@ -1,15 +1,91 @@
 //! The versioned encryption envelope produced by the browser. The server
 //! validates its shape strictly and stores it opaquely; it never decrypts.
+//!
+//! Every algorithm is a variant, and every version is a match arm. Adding a
+//! key derivation means a new `Kdf` variant with its own parameter rules and
+//! a new arm in `validate`; nothing else changes, and the old one keeps
+//! being accepted for as long as links carrying it may still be opened.
 
 use data_encoding::BASE64_NOPAD;
 use serde::{Deserialize, Serialize};
 
+/// The envelope format version the interface produces today.
 pub const VERSION: u32 = 1;
-pub const KDF_NAME: &str = "PBKDF2-SHA256";
-pub const CIPHER_NAME: &str = "AES-256-GCM";
 const SALT_BYTES: usize = 16;
 const IV_BYTES: usize = 12;
 const GCM_TAG_BYTES: usize = 16;
+
+/// A password-stretching algorithm the service knows how to describe and
+/// bound. The browser does the work; the server checks the parameters are
+/// within what it will store and what the interface will derive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KdfAlgorithm {
+    Pbkdf2Sha256,
+}
+
+impl KdfAlgorithm {
+    /// The name on the wire, which is also what the interface advertises.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            KdfAlgorithm::Pbkdf2Sha256 => "PBKDF2-SHA256",
+        }
+    }
+
+    fn from_wire_name(name: &str) -> Option<Self> {
+        match name {
+            "PBKDF2-SHA256" => Some(KdfAlgorithm::Pbkdf2Sha256),
+            _ => None,
+        }
+    }
+}
+
+/// The key derivation an envelope was made with, parameters included.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kdf {
+    Pbkdf2Sha256 { iterations: u32, salt: Vec<u8> },
+}
+
+impl Kdf {
+    pub fn algorithm(&self) -> KdfAlgorithm {
+        match self {
+            Kdf::Pbkdf2Sha256 { .. } => KdfAlgorithm::Pbkdf2Sha256,
+        }
+    }
+
+    /// The work factor, in the algorithm's own unit.
+    pub fn work_factor(&self) -> u32 {
+        match self {
+            Kdf::Pbkdf2Sha256 { iterations, .. } => *iterations,
+        }
+    }
+
+    pub fn salt(&self) -> &[u8] {
+        match self {
+            Kdf::Pbkdf2Sha256 { salt, .. } => salt,
+        }
+    }
+}
+
+/// The cipher an envelope was sealed with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Cipher {
+    Aes256Gcm { iv: Vec<u8> },
+}
+
+impl Cipher {
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            Cipher::Aes256Gcm { .. } => "AES-256-GCM",
+        }
+    }
+
+    pub fn iv(&self) -> &[u8] {
+        match self {
+            Cipher::Aes256Gcm { iv } => iv,
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum EnvelopeError {
@@ -34,6 +110,9 @@ pub enum EnvelopeError {
 #[derive(Clone, Copy, Debug)]
 pub struct EnvelopeLimits {
     pub max_plaintext_bytes: usize,
+    /// The one algorithm the interface produces, and the bounds on its
+    /// work factor. A second algorithm gets its own bounds beside these.
+    pub kdf: KdfAlgorithm,
     pub min_iterations: u32,
     pub max_iterations: u32,
 }
@@ -80,36 +159,25 @@ pub struct CipherWire {
 /// Validated form. Constructing one proves the shape is acceptable.
 #[derive(Clone, Debug)]
 pub struct Envelope {
-    pub iterations: u32,
-    pub salt: Vec<u8>,
-    pub iv: Vec<u8>,
+    pub version: u32,
+    pub kdf: Kdf,
+    pub cipher: Cipher,
     pub ciphertext: Vec<u8>,
 }
 
 impl Envelope {
     pub fn validate(wire: &EnvelopeWire, limits: &EnvelopeLimits) -> Result<Self, EnvelopeError> {
-        if wire.version != VERSION {
-            return Err(EnvelopeError::Version);
+        // One arm per format version this service still accepts. A version
+        // stays here until no link carrying it can still be alive.
+        match wire.version {
+            1 => Self::validate_v1(wire, limits),
+            _ => Err(EnvelopeError::Version),
         }
-        if wire.kdf.name != KDF_NAME {
-            return Err(EnvelopeError::Kdf);
-        }
-        if wire.kdf.iterations < limits.min_iterations
-            || wire.kdf.iterations > limits.max_iterations
-        {
-            return Err(EnvelopeError::Iterations);
-        }
-        if wire.cipher.name != CIPHER_NAME {
-            return Err(EnvelopeError::Cipher);
-        }
-        let salt = decode(&wire.kdf.salt).ok_or(EnvelopeError::Salt)?;
-        if salt.len() != SALT_BYTES {
-            return Err(EnvelopeError::Salt);
-        }
-        let iv = decode(&wire.cipher.iv).ok_or(EnvelopeError::Iv)?;
-        if iv.len() != IV_BYTES {
-            return Err(EnvelopeError::Iv);
-        }
+    }
+
+    fn validate_v1(wire: &EnvelopeWire, limits: &EnvelopeLimits) -> Result<Self, EnvelopeError> {
+        let kdf = Self::validate_kdf(&wire.kdf, limits)?;
+        let cipher = Self::validate_cipher(&wire.cipher)?;
         if wire.ciphertext.len() > limits.max_ciphertext_bytes().div_ceil(3) * 4 {
             return Err(EnvelopeError::TooLarge);
         }
@@ -121,27 +189,70 @@ impl Envelope {
             return Err(EnvelopeError::TooLarge);
         }
         Ok(Self {
-            iterations: wire.kdf.iterations,
-            salt,
-            iv,
+            version: 1,
+            kdf,
+            cipher,
             ciphertext,
         })
     }
 
+    /// Each algorithm checks its own parameters against its own bounds.
+    fn validate_kdf(wire: &KdfWire, limits: &EnvelopeLimits) -> Result<Kdf, EnvelopeError> {
+        let algorithm = KdfAlgorithm::from_wire_name(&wire.name).ok_or(EnvelopeError::Kdf)?;
+        if algorithm != limits.kdf {
+            return Err(EnvelopeError::Kdf);
+        }
+        match algorithm {
+            KdfAlgorithm::Pbkdf2Sha256 => {
+                if wire.iterations < limits.min_iterations
+                    || wire.iterations > limits.max_iterations
+                {
+                    return Err(EnvelopeError::Iterations);
+                }
+                let salt = decode(&wire.salt).ok_or(EnvelopeError::Salt)?;
+                if salt.len() != SALT_BYTES {
+                    return Err(EnvelopeError::Salt);
+                }
+                Ok(Kdf::Pbkdf2Sha256 {
+                    iterations: wire.iterations,
+                    salt,
+                })
+            }
+        }
+    }
+
+    fn validate_cipher(wire: &CipherWire) -> Result<Cipher, EnvelopeError> {
+        match wire.name.as_str() {
+            "AES-256-GCM" => {
+                let iv = decode(&wire.iv).ok_or(EnvelopeError::Iv)?;
+                if iv.len() != IV_BYTES {
+                    return Err(EnvelopeError::Iv);
+                }
+                Ok(Cipher::Aes256Gcm { iv })
+            }
+            _ => Err(EnvelopeError::Cipher),
+        }
+    }
+
     pub fn to_wire(&self) -> EnvelopeWire {
         EnvelopeWire {
-            version: VERSION,
+            version: self.version,
             kdf: KdfWire {
-                name: KDF_NAME.to_owned(),
-                iterations: self.iterations,
-                salt: BASE64_NOPAD.encode(&self.salt),
+                name: self.kdf.algorithm().wire_name().to_owned(),
+                iterations: self.kdf.work_factor(),
+                salt: BASE64_NOPAD.encode(self.kdf.salt()),
             },
             cipher: CipherWire {
-                name: CIPHER_NAME.to_owned(),
-                iv: BASE64_NOPAD.encode(&self.iv),
+                name: self.cipher.wire_name().to_owned(),
+                iv: BASE64_NOPAD.encode(self.cipher.iv()),
             },
             ciphertext: BASE64_NOPAD.encode(&self.ciphertext),
         }
+    }
+
+    /// Bytes held for this envelope's variable parts.
+    pub fn resident_bytes(&self) -> usize {
+        self.ciphertext.len() + self.kdf.salt().len() + self.cipher.iv().len()
     }
 }
 
@@ -157,6 +268,7 @@ mod tests {
     fn limits() -> EnvelopeLimits {
         EnvelopeLimits {
             max_plaintext_bytes: 64,
+            kdf: KdfAlgorithm::Pbkdf2Sha256,
             min_iterations: 1000,
             max_iterations: 10_000,
         }
@@ -166,12 +278,12 @@ mod tests {
         EnvelopeWire {
             version: 1,
             kdf: KdfWire {
-                name: KDF_NAME.into(),
+                name: "PBKDF2-SHA256".into(),
                 iterations: 5000,
                 salt: BASE64_NOPAD.encode(&[1u8; 16]),
             },
             cipher: CipherWire {
-                name: CIPHER_NAME.into(),
+                name: "AES-256-GCM".into(),
                 iv: BASE64_NOPAD.encode(&[2u8; 12]),
             },
             ciphertext: BASE64_NOPAD.encode(&[3u8; 40]),
@@ -248,6 +360,7 @@ mod tests {
     fn body_limit_covers_the_largest_envelope() {
         let l = EnvelopeLimits {
             max_plaintext_bytes: 65536,
+            kdf: KdfAlgorithm::Pbkdf2Sha256,
             min_iterations: 1,
             max_iterations: 1,
         };

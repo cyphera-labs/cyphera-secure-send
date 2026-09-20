@@ -58,7 +58,8 @@ response, not features.
 | `max_plaintext_bytes` | `65536` | the interface refuses larger text; the API refuses the corresponding ciphertext |
 | `memory_budget_bytes` | `268435456` | the most the store will hold, counting each message at its payload plus roughly a kilobyte of overhead. A create that would exceed it is refused with a capacity error; nothing accepted is ever evicted. Must hold at least sixteen maximum-size messages |
 | `max_failed_proofs` | `5` | wrong passwords before the message is destroyed |
-| `kdf.recommended_iterations` | `600000` | what the interface uses |
+| `kdf.algorithm` | `pbkdf2-sha256` | the password-stretching algorithm the interface uses, and the only one the API accepts. One choice today |
+| `kdf.recommended_iterations` | `600000` | the work factor the interface uses. Raise it to make guessing slower for everyone, at the cost of the same wait for the sender and the reader |
 | `kdf.min_iterations` / `kdf.max_iterations` | `100000` / `5000000` | what the API accepts |
 
 ## rate_limits

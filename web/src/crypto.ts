@@ -37,6 +37,23 @@ export interface Envelope {
   ciphertext: string;
 }
 
+/**
+ * What the server asks the page to derive keys with. The page knows a fixed
+ * set of algorithms; a name outside that set is refused before any secret
+ * is typed, rather than silently substituted.
+ */
+export interface KdfSpec {
+  name: string;
+  iterations: number;
+}
+
+export function assertKnownKdf(spec: KdfSpec): void {
+  if (spec.name !== KDF_NAME) throw new Error(`this page cannot derive keys with ${spec.name}`);
+  if (!Number.isSafeInteger(spec.iterations) || spec.iterations < MIN_ITERATIONS || spec.iterations > MAX_ITERATIONS) {
+    throw new Error("unsupported key derivation work factor");
+  }
+}
+
 export interface Sealed {
   envelope: Envelope;
   /** base64url, 32 bytes. Sent to the server at create. */
@@ -119,7 +136,9 @@ export async function sha256(bytes: Bytes): Promise<Bytes> {
   return new Uint8Array(await subtle.digest("SHA-256", bytes));
 }
 
-export async function seal(plaintext: string, password: string, iterations: number): Promise<Sealed> {
+export async function seal(plaintext: string, password: string, kdf: KdfSpec): Promise<Sealed> {
+  assertKnownKdf(kdf);
+  const { iterations } = kdf;
   const linkSecretBytes = randomBytes(SECRET_BYTES);
   const salt = randomBytes(SALT_BYTES);
   const iv = randomBytes(IV_BYTES);
@@ -197,6 +216,10 @@ function assertSupported(envelope: Envelope): void {
  * The recipient needs the salt and iterations to compute the proof before
  * the server will hand over the envelope. They are not secret, so the sender's
  * page encodes them into the fragment alongside the link secret.
+ *
+ * The three-part shape is specific to PBKDF2, whose only parameter is the
+ * count. A second algorithm would carry its parameters in a fourth part with
+ * a distinguishing prefix, and links made before it keep this shape.
  */
 export interface LinkParams {
   linkSecret: string;
