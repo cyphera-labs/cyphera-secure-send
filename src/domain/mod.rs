@@ -32,14 +32,18 @@ pub struct StoredMessage {
 }
 
 impl StoredMessage {
-    /// Approximate resident size, used as the cache weight.
+    /// Approximate resident size, used as the cache weight. The constant
+    /// covers the fixed fields, the allocations' headers, and the cache's
+    /// own bookkeeping per entry, measured at roughly three times the
+    /// payload for a small message; under-counting it lets the store exceed
+    /// the container's memory before its own budget.
     pub fn weight(&self) -> u32 {
         let bytes = self.envelope.ciphertext.len()
             + self.envelope.salt.len()
             + self.envelope.iv.len()
             + self.sender.as_str().len()
             + self.recipient.as_str().len()
-            + 256;
+            + 1024;
         u32::try_from(bytes).unwrap_or(u32::MAX)
     }
 

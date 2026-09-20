@@ -92,8 +92,11 @@ Each of these is enforced by a test.
    most once**, not exactly once: a connection that drops after that point
    loses the message, and nothing can recover it. That is the deliberate
    trade for never handing the same message over twice.
-8. Memory is bounded. When the budget is exceeded the least valuable entries
-   are evicted and each eviction is audited.
+8. Memory is bounded, and the bound is enforced at the door. A message that
+   does not fit is refused with a capacity error and the sender is told;
+   nothing already accepted is ever discarded to make room, so an
+   acknowledged link is always a stored message until it is read, revoked,
+   or expires.
 9. A restart discards every pending message. Nothing is written to disk.
 10. Audit events carry no message secret: the event type has no field for
     plaintext, password, proof, verifier, link secret, or revoke token, and
@@ -133,7 +136,7 @@ Each of these is enforced by a test.
 | Recipient double-read, replay | yes | atomic take |
 | Two recipients racing | yes | one wins, one gets the generic response |
 | Probing whether an id exists | yes | identical responses; 2^128 id space |
-| Flooding to exhaust memory | yes | per-client create limit, weight budget, eviction |
+| Flooding to exhaust memory | yes | per-client create limit, weight budget refused at the door; a full store is a visible capacity error, never a silent drop |
 | Spoofed client address | yes | `X-Forwarded-For` honored only from configured proxy networks |
 | Cross-site request forgery | yes | JSON-only API, no CORS; session cookies are `SameSite=Lax` |
 | Login CSRF and authorization-code injection | yes | state bound to a login cookie, single-use, PKCE, nonce in the ID token |

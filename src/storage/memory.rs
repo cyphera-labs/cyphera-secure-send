@@ -17,6 +17,10 @@ use crate::domain::{MessageId, Proof, RevokeToken, StoredMessage, Verifier};
 
 pub struct MemoryStore {
     cache: Cache<MessageId, StoredMessage>,
+    /// Serialises admission. The cache decides whether a new entry fits only
+    /// while it settles its pending work, so two creates racing past the
+    /// same free-space check could both be told yes and one be dropped.
+    admission: tokio::sync::Mutex<()>,
     max_failed_proofs: u32,
     budget_bytes: u64,
     expired: Arc<AtomicU64>,
@@ -95,6 +99,7 @@ impl MemoryStore {
 
         Self {
             cache,
+            admission: tokio::sync::Mutex::new(()),
             max_failed_proofs,
             budget_bytes: memory_budget_bytes,
             expired,
@@ -111,12 +116,31 @@ impl MemoryStore {
 
 #[async_trait]
 impl MessageStore for MemoryStore {
+    /// Stores a message, or says it cannot. The cache never evicts an
+    /// accepted message to make room for a new one: a sender who was told
+    /// "delivered" must be able to rely on it, and a sender who cannot be
+    /// accommodated must be told so rather than handed a link to nothing.
     async fn put(&self, message: StoredMessage) -> Result<(), StoreError> {
-        if u64::from(message.weight()) > self.cache.policy().max_capacity().unwrap_or(u64::MAX) {
+        let weight = u64::from(message.weight());
+        let _admitting = self.admission.lock().await;
+
+        // Settle expiries first so freed room counts, then ask whether this
+        // one fits in what is left.
+        self.cache.run_pending_tasks().await;
+        if self.cache.weighted_size().saturating_add(weight) > self.budget_bytes {
             return Err(StoreError::Full);
         }
-        self.cache.insert(message.id.clone(), message).await;
-        Ok(())
+
+        let id = message.id.clone();
+        self.cache.insert(id.clone(), message).await;
+        // Apply the insert now, so the next caller's check sees it, and so
+        // the cache's own admission decision is final before we answer.
+        self.cache.run_pending_tasks().await;
+        if self.cache.contains_key(&id) {
+            Ok(())
+        } else {
+            Err(StoreError::Full)
+        }
     }
 
     async fn take(&self, id: &MessageId, proof: &Proof, policy: &TakePolicy) -> TakeOutcome {
@@ -170,9 +194,15 @@ impl MessageStore for MemoryStore {
             CompResult::ReplacedWith(entry) => TakeOutcome::WrongProof {
                 failed_proofs: entry.into_value().failed_proofs,
             },
-            CompResult::Unchanged(entry) => TakeOutcome::Denied {
-                recipient: entry.into_value().recipient,
-            },
+            CompResult::Unchanged(entry) => {
+                // Denied inside the closure before any comparison, so pay for
+                // one here: a probe must cost the same whether the message
+                // exists or not.
+                Verifier::dummy().matches(&proof);
+                TakeOutcome::Denied {
+                    recipient: entry.into_value().recipient,
+                }
+            }
             CompResult::Inserted(_) => TakeOutcome::Missing,
         }
     }
@@ -256,6 +286,59 @@ mod tests {
 
     fn store(sink: Arc<MemorySink>) -> MemoryStore {
         MemoryStore::new(10 * 1024 * 1024, 3, sink)
+    }
+
+    /// The failure that matters most: a store at its budget must refuse,
+    /// never acknowledge a message it then quietly drops.
+    #[tokio::test]
+    async fn a_full_store_refuses_rather_than_dropping_what_it_acknowledged() {
+        let sink = Arc::new(MemorySink::default());
+        let (sample, _, _) = message(3600);
+        // Room for a handful, then no more.
+        let store = MemoryStore::new(u64::from(sample.weight()) * 5, 3, sink);
+
+        let mut accepted = Vec::new();
+        let mut refused = 0;
+        for _ in 0..40 {
+            let (m, proof, _) = message(3600);
+            match store.put(m.clone()).await {
+                Ok(()) => accepted.push((m.id, proof)),
+                Err(StoreError::Full) => refused += 1,
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+        assert!(refused > 0, "the budget should have been reached");
+        assert!(!accepted.is_empty());
+
+        // Every acknowledgement was honest.
+        for (id, proof) in accepted {
+            let outcome = store.take(&id, &proof, &TakePolicy::allow_any()).await;
+            assert!(
+                matches!(outcome, TakeOutcome::Taken(_)),
+                "an acknowledged message must be retrievable"
+            );
+        }
+        // And nothing was evicted to make that so.
+        assert_eq!(store.stats().await.evicted_total, 0);
+    }
+
+    /// Room freed by expiry is room the next sender may use. The cache keeps
+    /// its own clock, so this waits for a real second rather than a paused one.
+    #[tokio::test]
+    async fn expiry_frees_room_for_the_next_message() {
+        let sink = Arc::new(MemorySink::default());
+        let (sample, _, _) = message(3600);
+        let store = MemoryStore::new(u64::from(sample.weight()) * 2, 3, sink);
+
+        let (short, _, _) = message(1);
+        store.put(short).await.unwrap();
+        let (a, _, _) = message(3600);
+        store.put(a).await.unwrap();
+        let (b, _, _) = message(3600);
+        assert!(matches!(store.put(b.clone()).await, Err(StoreError::Full)));
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        store.put(b).await.unwrap();
     }
 
     #[tokio::test]
@@ -410,21 +493,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn over_budget_messages_are_refused_and_pressure_evicts() {
+    async fn over_budget_messages_are_refused_and_pressure_never_evicts() {
         let sink = Arc::new(MemorySink::default());
-        let s = MemoryStore::new(2000, 3, sink.clone());
+        let s = MemoryStore::new(4000, 3, sink.clone());
         let (m, _, _) = message(60);
         let mut huge = m.clone();
-        huge.envelope.ciphertext = vec![0; 4000];
+        huge.envelope.ciphertext = vec![0; 8000];
         assert!(matches!(s.put(huge).await, Err(StoreError::Full)));
+
+        let mut accepted = 0;
         for _ in 0..10 {
             let (m, _, _) = message(60);
-            s.put(m).await.unwrap();
+            match s.put(m).await {
+                Ok(()) => accepted += 1,
+                Err(StoreError::Full) => {}
+                Err(other) => panic!("unexpected {other:?}"),
+            }
         }
-        s.run_pending_tasks().await;
-        assert!(s.stats().await.weighted_bytes <= 2000);
+        assert!(accepted > 0 && accepted < 10);
+        let stats = s.stats().await;
+        assert!(stats.weighted_bytes <= 4000);
+        assert_eq!(stats.active_messages, accepted);
+        // Pressure is answered at the door, never by discarding what was accepted.
+        assert_eq!(stats.evicted_total, 0);
         assert!(
-            sink.events()
+            !sink
+                .events()
                 .iter()
                 .any(|e| e.event_type == "message.evicted")
         );
