@@ -2,6 +2,7 @@
 //! variables. Every key can be set as `CYPHERA_SECURESEND__SECTION__KEY`.
 
 use ipnet::IpNet;
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -18,11 +19,45 @@ pub enum ConfigError {
     Invalid(String),
 }
 
+/// A list whose entries may arrive already typed, from a file, or as
+/// strings, from the environment, where an unset optional is emitted by
+/// every templating tool as an empty value. Blank entries are dropped rather
+/// than failing the start: `KEY=` means "none", the same as not setting it.
+fn list_of_parsed<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: std::str::FromStr + Deserialize<'de>,
+    T::Err: std::fmt::Display,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry<T> {
+        Typed(T),
+        Text(String),
+    }
+    let entries: Vec<Entry<T>> = Vec::deserialize(deserializer)?;
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match entry {
+            Entry::Typed(value) => out.push(value),
+            Entry::Text(text) => {
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                out.push(text.parse().map_err(de::Error::custom)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
-    /// The product mode. `eval` records who users say they are; `enterprise`
-    /// verifies who they are through the identity provider in `auth.oidc`.
+    /// The product mode. `standard` records who users say they are;
+    /// `enterprise` verifies who they are through the identity provider in
+    /// `enterprise.oidc`.
     pub mode: Mode,
     pub server: ServerSettings,
     pub messages: MessageSettings,
@@ -47,6 +82,7 @@ pub struct ServerSettings {
     pub management_bind: SocketAddr,
     /// Networks whose `X-Forwarded-For` is trusted. Empty means the peer
     /// address is always the client address.
+    #[serde(deserialize_with = "list_of_parsed")]
     pub trusted_proxies: Vec<IpNet>,
     /// How many proxies stand between the client and this service, when
     /// their addresses are not knowable in advance. A proxy appends the
@@ -86,6 +122,7 @@ pub struct TlsSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct MessageSettings {
     /// Choices offered in the interface, in seconds.
+    #[serde(deserialize_with = "list_of_parsed")]
     pub ttl_options_seconds: Vec<u64>,
     pub default_ttl_seconds: u64,
     /// Hard ceiling accepted by the API regardless of the options above.
@@ -490,6 +527,10 @@ impl Settings {
         if self.enterprise.oidc.scopes.is_empty() {
             self.enterprise.oidc.scopes = OidcSettings::default().scopes;
         }
+        // No choices at all is not a choice; an unset list means the default.
+        if self.messages.ttl_options_seconds.is_empty() {
+            self.messages.ttl_options_seconds = MessageSettings::default().ttl_options_seconds;
+        }
         if self
             .server
             .public_base_url
@@ -498,6 +539,15 @@ impl Settings {
             .is_some_and(str::is_empty)
         {
             self.server.public_base_url = None;
+        }
+        // The scheme is case-insensitive, and everything that later asks
+        // "is this HTTPS" compares text, so settle its case here.
+        if let Some(url) = self.server.public_base_url.as_mut() {
+            *url = url.trim().to_owned();
+            if let Some(at) = url.find("://") {
+                let scheme = url[..at].to_ascii_lowercase();
+                url.replace_range(..at, &scheme);
+            }
         }
     }
 
@@ -529,6 +579,14 @@ impl Settings {
             return Err(ConfigError::Invalid(
                 "messages.max_plaintext_bytes is too small".into(),
             ));
+        }
+        // Messages are text secrets, and this bounds what one request may
+        // make the service buffer.
+        const MAX_PLAINTEXT_CEILING: usize = 16 * 1024 * 1024;
+        if m.max_plaintext_bytes > MAX_PLAINTEXT_CEILING {
+            return Err(ConfigError::Invalid(format!(
+                "messages.max_plaintext_bytes cannot exceed {MAX_PLAINTEXT_CEILING}"
+            )));
         }
         let largest = (m.max_plaintext_bytes as u64) + 1024;
         if m.memory_budget_bytes < largest * 16 {
@@ -585,6 +643,14 @@ impl Settings {
             if parsed.query().is_some() || parsed.fragment().is_some() {
                 return Err(ConfigError::Invalid(
                     "server.public_base_url must not carry a query or fragment".into(),
+                ));
+            }
+        }
+        if self.mode == Mode::Standard {
+            let o = &self.enterprise.oidc;
+            if !o.issuer.is_empty() || !o.client_id.is_empty() || o.client_secret_file.is_some() {
+                return Err(ConfigError::Invalid(
+                    "an identity provider is configured under enterprise.oidc but mode is standard, so it would be ignored and the service would be open to anyone. Set mode: enterprise, or remove the provider".into(),
                 ));
             }
         }
@@ -658,6 +724,16 @@ impl Settings {
                     "enterprise.creation.require_oidc is off, which allows anonymous creation; serve over https before opening that".into(),
                 ));
             }
+        }
+        if let Some(net) = self
+            .server
+            .trusted_proxies
+            .iter()
+            .find(|net| net.prefix_len() == 0)
+        {
+            return Err(ConfigError::Invalid(format!(
+                "server.trusted_proxies contains {net}, which is every address: that trusts the header from anyone, and the client is then whatever they wrote. Name the proxy's networks, or count hops with server.trusted_hops"
+            )));
         }
         if self.server.request_timeout_seconds == 0 {
             return Err(ConfigError::Invalid(
@@ -744,18 +820,18 @@ impl OidcSettings {
             return Ok(s.to_owned());
         }
         let path = self.client_secret_file.as_ref().ok_or_else(|| {
-            ConfigError::Invalid("auth.oidc client secret is not configured".into())
+            ConfigError::Invalid("enterprise.oidc client secret is not configured".into())
         })?;
         let raw = std::fs::read_to_string(path).map_err(|e| {
             ConfigError::Invalid(format!(
-                "auth.oidc.client_secret_file {}: {e}",
+                "enterprise.oidc.client_secret_file {}: {e}",
                 path.display()
             ))
         })?;
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return Err(ConfigError::Invalid(
-                "auth.oidc.client_secret_file is empty".into(),
+                "enterprise.oidc.client_secret_file is empty".into(),
             ));
         }
         Ok(trimmed.to_owned())
@@ -844,6 +920,59 @@ mod tests {
         s.enterprise.oidc.client_secret = Some("hunter2".into());
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("hunter2"));
+    }
+
+    #[test]
+    fn a_provider_configured_in_standard_mode_is_refused() {
+        let mut s = Settings::default();
+        s.enterprise.oidc.issuer = "https://idp.example.com".into();
+        let err = s.validate().unwrap_err().to_string();
+        assert!(err.contains("mode is standard"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_list_entry_from_the_environment_means_none() {
+        let s: Settings =
+            serde_json::from_str(r#"{"server":{"trusted_proxies":[""]},"messages":{"ttl_options_seconds":["", "300", "3600"]}}"#)
+                .unwrap();
+        assert!(s.server.trusted_proxies.is_empty());
+        assert_eq!(s.messages.ttl_options_seconds, vec![300, 3600]);
+
+        // Typed entries from a file still work, and a bad entry still fails.
+        let s: Settings =
+            serde_json::from_str(r#"{"messages":{"ttl_options_seconds":[300, 3600]}}"#).unwrap();
+        assert_eq!(s.messages.ttl_options_seconds, vec![300, 3600]);
+        assert!(
+            serde_json::from_str::<Settings>(r#"{"server":{"trusted_proxies":["not a network"]}}"#)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_scheme_case_does_not_decide_whether_cookies_are_secure() {
+        let mut s = Settings::default();
+        s.server.public_base_url = Some("HTTPS://send.example.com".into());
+        s.normalize();
+        s.validate().unwrap();
+        assert!(s.public_https());
+    }
+
+    #[test]
+    fn a_proxy_network_containing_everything_is_refused() {
+        let mut s = Settings::default();
+        s.server.trusted_proxies = vec!["0.0.0.0/0".parse().unwrap()];
+        assert!(s.validate().is_err());
+        let mut s = Settings::default();
+        s.server.trusted_proxies = vec!["::/0".parse().unwrap()];
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn the_plaintext_size_has_a_ceiling() {
+        let mut s = Settings::default();
+        s.messages.max_plaintext_bytes = 1_000_000_000;
+        s.messages.memory_budget_bytes = u64::MAX;
+        assert!(s.validate().is_err());
     }
 
     #[test]

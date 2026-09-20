@@ -88,6 +88,7 @@ for name in "${names[@]}"; do
     *TTL_OPTIONS_SECONDS) value="300,3600" ;;
     *_BIND) value="127.0.0.1:9091" ;;
     *PUBLIC_BASE_URL) value="https://send.example.com" ;;
+    *ISSUER) value="https://idp.example.com" ;;
     *__MODE) value="standard" ;;
     *EMAIL_CLAIM) value="email" ;;
     *__SINK) value="stdout" ;;
@@ -100,7 +101,21 @@ for name in "${names[@]}"; do
     *HSTS|*REQUIRE_*|*EXTERNAL_RECIPIENTS|*INCLUDE_*|*SHOW_*) value="true" ;;
     *) value="text" ;;
   esac
-  if env "$name=$value" "$binary" check-config > /dev/null 2>"$work/err"; then
+  # A provider setting only makes sense in enterprise mode, and enterprise
+  # mode needs the rest of the provider to be present, so each such variable
+  # is loaded on top of a minimal enterprise configuration.
+  base=()
+  case "$name" in
+    *__ENTERPRISE__*)
+      base=(
+        "CYPHERA_SECURESEND__MODE=enterprise"
+        "CYPHERA_SECURESEND__SERVER__PUBLIC_BASE_URL=https://send.example.com"
+        "CYPHERA_SECURESEND__ENTERPRISE__OIDC__ISSUER=https://idp.example.com"
+        "CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_ID=securesend"
+        "CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET=secret"
+      ) ;;
+  esac
+  if env "${base[@]}" "$name=$value" "$binary" check-config > /dev/null 2>"$work/err"; then
     note "ok    $name"
   else
     note "FAIL  $name=$value: $(head -1 "$work/err")"
