@@ -97,7 +97,11 @@ Each of these is enforced by a test.
    nothing already accepted is ever discarded to make room, so an
    acknowledged link is always a stored message until it is read, revoked,
    or expires.
-9. A restart discards every pending message. Nothing is written to disk.
+9. With the memory backend, a restart discards every pending message and
+   nothing is written to disk. With the shared store, messages live in
+   Redis for their lifetime and survive a restart of the service; every
+   decision the store makes runs as one atomic script there, so at-most-once
+   holds across any number of replicas.
 10. Audit events carry no message secret: the event type has no field for
     plaintext, password, proof, verifier, link secret, or revoke token, and
     no free-text field a diagnostic could leak through. It does carry

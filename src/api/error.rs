@@ -22,6 +22,10 @@ pub enum ApiError {
     TooLarge,
     RateLimited,
     Capacity,
+    /// The store behind the service cannot be reached. Distinct from every
+    /// answer about a message, because "try again" is the right advice and
+    /// "it is gone" would be a lie.
+    StoreUnavailable,
     Forbidden,
     Internal,
 }
@@ -34,6 +38,7 @@ impl ApiError {
             ApiError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too large"),
             ApiError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limited"),
             ApiError::Capacity => (StatusCode::SERVICE_UNAVAILABLE, "at capacity"),
+            ApiError::StoreUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "store unavailable"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "not permitted"),
             ApiError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         }

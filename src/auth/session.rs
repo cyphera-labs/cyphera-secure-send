@@ -10,6 +10,7 @@ use time::OffsetDateTime;
 
 use crate::domain::Email;
 use crate::domain::ids::Secret;
+use crate::storage::StoreError;
 
 #[derive(Clone, Debug)]
 pub struct Session {
@@ -34,22 +35,22 @@ pub struct PendingLogin {
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     fn session_ttl(&self) -> Duration;
-    async fn start_login(&self, state: String, pending: PendingLogin);
+    async fn start_login(&self, state: String, pending: PendingLogin) -> Result<(), StoreError>;
     /// Removes and returns the pending login: a state value works once.
-    async fn take_login(&self, state: &str) -> Option<PendingLogin>;
+    async fn take_login(&self, state: &str) -> Result<Option<PendingLogin>, StoreError>;
     async fn create(
         &self,
         subject: String,
         email: Email,
         issuer: String,
-    ) -> Result<(String, Session), ()>;
-    async fn get(&self, id: &str) -> Option<Session>;
-    async fn revoke(&self, id: &str);
+    ) -> Result<(String, Session), StoreError>;
+    async fn get(&self, id: &str) -> Result<Option<Session>, StoreError>;
+    async fn revoke(&self, id: &str) -> Result<(), StoreError>;
     /// Ends every session held by one account, and returns how many. This
     /// is what makes "disable them at the provider" take effect now rather
     /// than when their sessions would have expired: the provider stops the
     /// next sign-in, this stops the current ones.
-    async fn revoke_account(&self, account: &AccountRef) -> u64;
+    async fn revoke_account(&self, account: &AccountRef) -> Result<u64, StoreError>;
 }
 
 /// One account, as an operator would name it: by the stable subject the
@@ -104,12 +105,13 @@ impl SessionStore for MemorySessionStore {
         self.session_ttl
     }
 
-    async fn start_login(&self, state: String, pending: PendingLogin) {
+    async fn start_login(&self, state: String, pending: PendingLogin) -> Result<(), StoreError> {
         self.pending.insert(state, pending).await;
+        Ok(())
     }
 
-    async fn take_login(&self, state: &str) -> Option<PendingLogin> {
-        self.pending.remove(state).await
+    async fn take_login(&self, state: &str) -> Result<Option<PendingLogin>, StoreError> {
+        Ok(self.pending.remove(state).await)
     }
 
     async fn create(
@@ -117,8 +119,10 @@ impl SessionStore for MemorySessionStore {
         subject: String,
         email: Email,
         issuer: String,
-    ) -> Result<(String, Session), ()> {
-        let id = Secret::generate().map_err(|_| ())?.to_base64url();
+    ) -> Result<(String, Session), StoreError> {
+        let id = Secret::generate()
+            .map_err(|e| StoreError::Unavailable(e.to_string()))?
+            .to_base64url();
         let session = Session {
             subject,
             email,
@@ -130,20 +134,23 @@ impl SessionStore for MemorySessionStore {
         Ok((id, session))
     }
 
-    async fn get(&self, id: &str) -> Option<Session> {
-        let session = self.sessions.get(id).await?;
+    async fn get(&self, id: &str) -> Result<Option<Session>, StoreError> {
+        let Some(session) = self.sessions.get(id).await else {
+            return Ok(None);
+        };
         if session.expires_at <= OffsetDateTime::now_utc() {
             self.sessions.remove(id).await;
-            return None;
+            return Ok(None);
         }
-        Some(session)
+        Ok(Some(session))
     }
 
-    async fn revoke(&self, id: &str) {
+    async fn revoke(&self, id: &str) -> Result<(), StoreError> {
         self.sessions.remove(id).await;
+        Ok(())
     }
 
-    async fn revoke_account(&self, account: &AccountRef) -> u64 {
+    async fn revoke_account(&self, account: &AccountRef) -> Result<u64, StoreError> {
         let ids: Vec<String> = self
             .sessions
             .iter()
@@ -153,7 +160,7 @@ impl SessionStore for MemorySessionStore {
         for id in &ids {
             self.sessions.remove(id).await;
         }
-        ids.len() as u64
+        Ok(ids.len() as u64)
     }
 }
 
@@ -237,20 +244,21 @@ mod tests {
                     next: "/".into(),
                 },
             )
-            .await;
-        assert!(store.take_login("st").await.is_some());
-        assert!(store.take_login("st").await.is_none());
+            .await
+            .unwrap();
+        assert!(store.take_login("st").await.unwrap().is_some());
+        assert!(store.take_login("st").await.unwrap().is_none());
         let (id, s) = store
             .create("sub".into(), Email::parse("a@b.co").unwrap(), "iss".into())
             .await
             .unwrap();
         assert_eq!(id.len(), 43);
         assert_eq!(
-            store.get(&id).await.unwrap().email.as_str(),
+            store.get(&id).await.unwrap().unwrap().email.as_str(),
             s.email.as_str()
         );
-        store.revoke(&id).await;
-        assert!(store.get(&id).await.is_none());
+        store.revoke(&id).await.unwrap();
+        assert!(store.get(&id).await.unwrap().is_none());
     }
 
     /// Ending an account's sessions ends all of them, and no one else's,
@@ -278,11 +286,12 @@ mod tests {
                 subject: Some("alice-sub".into()),
                 email: None,
             })
-            .await;
+            .await
+            .unwrap();
         assert_eq!(ended, 2);
-        assert!(store.get(&a1).await.is_none());
-        assert!(store.get(&a2).await.is_none());
-        assert!(store.get(&b1).await.is_some());
+        assert!(store.get(&a1).await.unwrap().is_none());
+        assert!(store.get(&a2).await.unwrap().is_none());
+        assert!(store.get(&b1).await.unwrap().is_some());
 
         // By address, case-insensitively, and nothing left to end afterwards.
         let (a3, _) = store
@@ -294,16 +303,18 @@ mod tests {
                 subject: None,
                 email: Some(Email::parse("ALICE@example.com").unwrap()),
             })
-            .await;
+            .await
+            .unwrap();
         assert_eq!(ended, 1);
-        assert!(store.get(&a3).await.is_none());
+        assert!(store.get(&a3).await.unwrap().is_none());
         assert_eq!(
             store
                 .revoke_account(&AccountRef {
                     subject: Some("alice-sub".into()),
                     email: None
                 })
-                .await,
+                .await
+                .unwrap(),
             0
         );
     }

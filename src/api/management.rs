@@ -6,7 +6,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Deserialize;
@@ -22,6 +22,7 @@ use crate::application::CounterSnapshot;
 use crate::audit::{AuditEvent, AuditEventType};
 use crate::auth::session::AccountRef;
 use crate::domain::Email;
+use crate::storage::StoreError;
 
 #[derive(Serialize)]
 pub struct Health {
@@ -102,20 +103,32 @@ pub struct Limits {
     pub consume_per_minute: u32,
 }
 
-async fn storage_health(state: &ManagementState) -> StorageHealth {
-    let s = state.app.service.store().stats().await;
+async fn storage_health(state: &ManagementState) -> Result<StorageHealth, StoreError> {
+    let store = state.app.service.store();
+    let s = store.stats().await?;
     let used_percent = if s.budget_bytes == 0 {
         0.0
     } else {
         (s.weighted_bytes as f64 / s.budget_bytes as f64) * 100.0
     };
-    StorageHealth {
-        backend: "memory",
+    Ok(StorageHealth {
+        backend: store.backend_name(),
         active_messages: s.active_messages,
         used_bytes: s.weighted_bytes,
         budget_bytes: s.budget_bytes,
         used_percent: (used_percent * 10.0).round() / 10.0,
-    }
+    })
+}
+
+/// What the management listener says when the store cannot be reached: the
+/// process is alive, which is what liveness asks, but it is not serving.
+fn store_unreachable(e: &StoreError) -> Response {
+    tracing::warn!(error = %e, "the message store cannot be reached");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({"status": "store unavailable"})),
+    )
+        .into_response()
 }
 
 fn started_at(state: &ManagementState) -> String {
@@ -134,32 +147,42 @@ async fn readyz(State(state): State<Arc<ManagementState>>) -> impl IntoResponse 
     }
 }
 
-async fn detailed_health(State(state): State<Arc<ManagementState>>) -> impl IntoResponse {
+async fn detailed_health(State(state): State<Arc<ManagementState>>) -> Response {
     let ready = state.ready.load(Ordering::SeqCst);
+    let storage = match storage_health(&state).await {
+        Ok(storage) => storage,
+        Err(e) => return store_unreachable(&e),
+    };
     let body = DetailedHealth {
         status: if ready { "ok" } else { "stopping" },
         ready,
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: state.started.elapsed().as_secs(),
         started_at: started_at(&state),
-        storage: storage_health(&state).await,
+        storage,
     };
     let code = if ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    (code, Json(body))
+    (code, Json(body)).into_response()
 }
 
-async fn stats(State(state): State<Arc<ManagementState>>) -> Json<Stats> {
-    let store = state.app.service.store().stats().await;
+async fn stats(State(state): State<Arc<ManagementState>>) -> Response {
+    let (store, storage) = match (
+        state.app.service.store().stats().await,
+        storage_health(&state).await,
+    ) {
+        (Ok(store), Ok(storage)) => (store, storage),
+        (Err(e), _) | (_, Err(e)) => return store_unreachable(&e),
+    };
     let settings = &state.app.settings;
     Json(Stats {
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: state.started.elapsed().as_secs(),
         started_at: started_at(&state),
-        storage: storage_health(&state).await,
+        storage,
         totals: Totals {
             lifecycle: state.app.service.counters().snapshot(),
             expired: store.expired_total,
@@ -176,13 +199,17 @@ async fn stats(State(state): State<Arc<ManagementState>>) -> Json<Stats> {
             consume_per_minute: settings.rate_limits.consume_per_minute,
         },
     })
+    .into_response()
 }
 
 async fn metrics(State(state): State<Arc<ManagementState>>) -> impl IntoResponse {
-    let stats = state.app.service.store().stats().await;
-    metrics::gauge!("securesend_messages_active").set(stats.active_messages as f64);
-    metrics::gauge!("securesend_store_bytes").set(stats.weighted_bytes as f64);
-    metrics::gauge!("securesend_store_budget_bytes").set(stats.budget_bytes as f64);
+    // The gauges describe the store; when it cannot be reached they keep
+    // their last values and the counters below still tell the story.
+    if let Ok(stats) = state.app.service.store().stats().await {
+        metrics::gauge!("securesend_messages_active").set(stats.active_messages as f64);
+        metrics::gauge!("securesend_store_bytes").set(stats.weighted_bytes as f64);
+        metrics::gauge!("securesend_store_budget_bytes").set(stats.budget_bytes as f64);
+    }
     (
         StatusCode::OK,
         [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
@@ -243,7 +270,10 @@ async fn revoke_sessions(
             .into_response();
     }
     let account = AccountRef { subject, email };
-    let ended = oidc.sessions.revoke_account(&account).await;
+    let ended = match oidc.sessions.revoke_account(&account).await {
+        Ok(ended) => ended,
+        Err(e) => return store_unreachable(&e),
+    };
 
     metrics::counter!("securesend_sessions_revoked_total").increment(ended);
     let mut event = AuditEvent::success(AuditEventType::AuthSessionsRevoked);

@@ -57,11 +57,12 @@ strategy. What matters:
   runbook.
 - **Memory.** `messages.memory_budget_bytes` bounds ciphertext; the process
   needs roughly that plus 64 MiB. Set the container limit accordingly.
-- **Replicas.** One. The memory backend is per-process; a second replica has
-  its own, separate set of messages, and a load balancer would send the
-  recipient to the wrong one. Set minimum and maximum replicas both to 1 and
-  use a `Recreate` strategy, because a rolling update runs two copies for a
-  moment and the old one takes its messages with it. One process covers a
+- **Replicas.** One, with the memory backend: it is per-process, a second
+  replica has its own separate set of messages, and a load balancer would
+  send the recipient to the wrong one. Set minimum and maximum replicas both
+  to 1 and use a `Recreate` strategy, because a rolling update runs two
+  copies for a moment and the old one takes its messages with it. For more
+  than one replica, see the shared store below. One process covers a
   large organization: the default budget holds thousands of maximum-size
   messages, and a restart takes well under a second.
 - **Proxy.** Set `server.trusted_proxies` to your ingress's address range so
@@ -71,6 +72,46 @@ strategy. What matters:
 - **TLS.** Terminate at the ingress, or set `server.tls.cert_path` and
   `server.tls.key_path` to terminate in-process. Enable `server.hsts` once
   HTTPS is in place.
+
+## Shared store
+
+Point the service at a Redis and it stops being one process: any number of
+replicas serve the same messages and sessions, a message created on one is
+read on another, and a restart of the service loses nothing. Use a Redis you
+already operate or rent, such as Azure Cache for Redis, Amazon ElastiCache,
+or Google Memorystore, over `rediss://` where the network is not yours.
+
+```sh
+helm install securesend oci://ghcr.io/cyphera-labs/charts/securesend \
+  --set storage.backend=redis \
+  --set storage.redis.existingSecret=redis-url \
+  --set replicaCount=3
+```
+
+That names a Secret, here called `redis-url`, holding the URL under the key
+`url`, password included. The chart switches to a rolling update, since
+replicas are now interchangeable.
+
+What to know:
+
+- **Configure Redis with `maxmemory-policy noeviction`.** The service
+  enforces its own budget and refuses a message that does not fit; it never
+  wants Redis to discard one it accepted.
+- **Rate limits are per replica.** Each process keeps its own buckets, so
+  three replicas allow three times the configured rate in aggregate. Divide
+  accordingly, or leave the per-message and per-identity limits to do the
+  work.
+- **Statistics are per replica** for lifecycle totals; the store figures
+  (active messages, bytes) are shared and the same from every replica.
+- **Expiry is Redis's.** Keys carry the message's expiry and Redis removes
+  them on time. The `message.expired` audit event is emitted by whichever
+  replica's housekeeping notices, and carries the message id only, since
+  the message itself is already gone.
+- **Not Redis Cluster.** The store's scripts touch keys under one prefix
+  that do not share a slot. A single instance, a replicated pair with
+  failover, or a managed service in that shape.
+- **The URL is a secret.** It carries the password. Use `url_file` or the
+  environment, and `rediss://` on any network you do not own.
 
 ## Health and stats
 

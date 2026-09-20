@@ -22,6 +22,8 @@ allow = [
   "MIT",
   "BSD-2-Clause",
   "BSD-3-Clause",
+  # Boost Software License, permissive; a hashing crate the Redis driver uses.
+  "BSL-1.0",
   "ISC",
   "Unicode-3.0",
   "Zlib",

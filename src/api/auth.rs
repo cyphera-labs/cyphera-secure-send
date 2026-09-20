@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use super::SharedState;
 use crate::audit::{AuditEvent, AuditEventType, ClientContext, Reason};
 use crate::auth::RequestPrincipal;
-use crate::auth::oidc::safe_next;
+use crate::auth::oidc::{OidcError, safe_next};
 
 /// The principal for this request: the session named by the cookie, if any
 /// and if valid. Anonymous mode never has one.
@@ -25,12 +25,17 @@ pub async fn principal(state: &SharedState, headers: &HeaderMap) -> RequestPrinc
         return RequestPrincipal::anonymous();
     };
     match oidc.sessions.get(cookie.value()).await {
-        Some(session) => RequestPrincipal {
+        Ok(Some(session)) => RequestPrincipal {
             subject: Some(session.subject),
             email: Some(session.email),
             issuer: Some(session.issuer),
         },
-        None => RequestPrincipal::anonymous(),
+        Ok(None) => RequestPrincipal::anonymous(),
+        // Fail closed: a session that cannot be confirmed is no session.
+        Err(e) => {
+            tracing::warn!(error = %e, "the session store cannot be reached");
+            RequestPrincipal::anonymous()
+        }
     }
 }
 
@@ -165,6 +170,17 @@ pub async fn callback(
             );
             (jar, Redirect::to(&next)).into_response()
         }
+        // Not a failure of the sign-in: the store behind it cannot be reached.
+        // The browser is told to try again rather than that it was refused.
+        Err(OidcError::Store(e)) => {
+            tracing::warn!(error = %sanitize(&e), "the session store cannot be reached");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                remove_login,
+                "sign-in is unavailable right now; try again",
+            )
+                .into_response()
+        }
         Err(e) => {
             metrics::counter!("securesend_auth_failures_total").increment(1);
             tracing::warn!(error = %sanitize(&e.to_string()), "sign-in could not be completed");
@@ -193,13 +209,17 @@ pub async fn logout(
     let ctx = client_context(&state, peer, &headers);
     let jar = CookieJar::from_headers(&headers);
     if let Some(cookie) = jar.get(oidc.cookies.session_name()) {
-        if let Some(session) = oidc.sessions.get(cookie.value()).await {
+        if let Ok(Some(session)) = oidc.sessions.get(cookie.value()).await {
             let mut event = AuditEvent::success(AuditEventType::AuthLogout).with_client(&ctx);
             event.subject = Some(session.subject);
             event.issuer = Some(session.issuer);
             state.audit.emit(event);
         }
-        oidc.sessions.revoke(cookie.value()).await;
+        if let Err(e) = oidc.sessions.revoke(cookie.value()).await {
+            // The cookie is removed regardless; the session then expires on
+            // its own. Worth knowing, not worth failing the sign-out for.
+            tracing::warn!(error = %e, "could not end the session in the store");
+        }
     }
     let jar = jar.remove(oidc.cookies.removal(oidc.cookies.session_name()));
     (StatusCode::NO_CONTENT, jar).into_response()

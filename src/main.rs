@@ -185,14 +185,17 @@ fn serve(settings: Settings) -> Result<(), String> {
             }
         }
         ready.store(false, Ordering::SeqCst);
-        let stats = state.service.store().stats().await;
+        let active = state
+            .service
+            .store()
+            .stats()
+            .await
+            .ok()
+            .map(|s| s.active_messages);
         let mut event = AuditEvent::success(AuditEventType::ServerStopping);
-        event.active_messages = Some(stats.active_messages);
+        event.active_messages = active;
         state.audit.emit(event);
-        tracing::info!(
-            active_messages = stats.active_messages,
-            "shutting down; pending messages are discarded"
-        );
+        tracing::info!(active_messages = ?active, "shutting down");
 
         handle.graceful_shutdown(Some(shutdown_timeout));
         let _ = public_task.await;

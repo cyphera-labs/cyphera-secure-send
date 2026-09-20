@@ -2,6 +2,8 @@
 //! one atomic step. There is no `get`, no `exists`, and no separate `delete`.
 
 pub mod memory;
+pub mod record;
+pub mod redis;
 
 use async_trait::async_trait;
 
@@ -94,11 +96,26 @@ pub struct StoreStats {
     pub evicted_total: u64,
 }
 
+/// Every operation can fail to reach the store, and says so: a backend over
+/// a network that cannot answer is not the same as a message that is not
+/// there, and the caller must be able to tell a recipient "try again" rather
+/// than "it is gone".
 #[async_trait]
 pub trait MessageStore: Send + Sync {
     async fn put(&self, message: StoredMessage) -> Result<(), StoreError>;
-    async fn take(&self, id: &MessageId, proof: &Proof, policy: &TakePolicy) -> TakeOutcome;
-    async fn revoke(&self, id: &MessageId, token: &RevokeToken) -> RevokeOutcome;
+    async fn take(
+        &self,
+        id: &MessageId,
+        proof: &Proof,
+        policy: &TakePolicy,
+    ) -> Result<TakeOutcome, StoreError>;
+    async fn revoke(
+        &self,
+        id: &MessageId,
+        token: &RevokeToken,
+    ) -> Result<RevokeOutcome, StoreError>;
     /// Exact figures; implementations settle pending housekeeping first.
-    async fn stats(&self) -> StoreStats;
+    async fn stats(&self) -> Result<StoreStats, StoreError>;
+    /// The backend's name, for health output.
+    fn backend_name(&self) -> &'static str;
 }

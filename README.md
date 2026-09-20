@@ -49,8 +49,10 @@ to.
   password before the server hands anything over. Repeated wrong attempts do
   eventually destroy it, which is deliberate: the count is configurable, and
   someone holding only the link can spend it to deny delivery.
-- **One binary, no database.** Messages live in bounded process memory and
-  vanish on restart. That is a feature.
+- **One binary, no database required.** Messages live in bounded process
+  memory and vanish on restart. That is a feature. When you need more than
+  one replica, or messages that outlive a restart, point it at a Redis you
+  already run and it uses that instead, with the same one-time guarantees.
 - **At most once.** Consumption is an atomic take, so two readers racing get
   one message and one "unavailable". At most, not exactly: the message is
   removed before the reply is written, so a connection that dies in between

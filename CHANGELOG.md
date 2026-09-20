@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Shared store on Redis: any number of replicas, messages and sessions that
+  survive a restart, the same one-time guarantees enforced by atomic
+  scripts, a store contract test run against both backends, and a chart
+  that rolls normally when the store is shared.
+- An operator can end an account's sessions immediately through the
+  management listener, pairing with disabling the account at the provider.
+- The envelope's algorithms are variants with their own bounds, so a second
+  key derivation is an addition; the interface is told the algorithm by name.
+- Every store call carries an error channel, so a store that cannot be
+  reached is a "try again", never a "gone".
+- Interface strings live in one module.
+
 ## 0.1.0 - 2026-09-18
 
 First release.

@@ -131,6 +131,10 @@ impl Verifier {
     }
 
     /// Constant-time comparison against the hash of a presented secret.
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     pub fn matches(&self, presented: &Secret) -> bool {
         let candidate = presented.hash();
         self.0.ct_eq(&candidate.0).into()

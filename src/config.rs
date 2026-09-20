@@ -172,12 +172,53 @@ pub struct RateLimitSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct StorageSettings {
     pub backend: StorageBackend,
+    pub redis: RedisSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageBackend {
+    /// In this process. One replica; a restart discards every message.
     Memory,
+    /// A Redis you run or rent. Any number of replicas; messages and
+    /// sessions survive a restart of the service.
+    Redis,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RedisSettings {
+    /// `redis://` or `rediss://` URL, password included if there is one,
+    /// which is why it is never printed back.
+    #[serde(skip_serializing)]
+    pub url: Option<String>,
+    /// A file holding the URL, for deployments that mount secrets.
+    pub url_file: Option<PathBuf>,
+    /// Every key this service writes starts with this.
+    pub key_prefix: String,
+    pub connect_timeout_seconds: u64,
+}
+
+impl RedisSettings {
+    pub fn resolve_url(&self) -> Result<String, ConfigError> {
+        if let Some(url) = &self.url {
+            return Ok(url.trim().to_owned());
+        }
+        let path = self
+            .url_file
+            .as_ref()
+            .ok_or_else(|| ConfigError::Invalid("storage.redis needs url or url_file".into()))?;
+        let raw = std::fs::read_to_string(path).map_err(|e| {
+            ConfigError::Invalid(format!("storage.redis.url_file {}: {e}", path.display()))
+        })?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(ConfigError::Invalid(
+                "storage.redis.url_file is empty".into(),
+            ));
+        }
+        Ok(trimmed.to_owned())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -432,6 +473,12 @@ impl Default for StorageSettings {
     fn default() -> Self {
         Self {
             backend: StorageBackend::Memory,
+            redis: RedisSettings {
+                url: None,
+                url_file: None,
+                key_prefix: "securesend".into(),
+                connect_timeout_seconds: 5,
+            },
         }
     }
 }
@@ -650,6 +697,41 @@ impl Settings {
                     "server.public_base_url must not carry a query or fragment".into(),
                 ));
             }
+        }
+        if self.storage.backend == StorageBackend::Redis {
+            let r = &self.storage.redis;
+            if r.url.as_deref().map(str::trim).is_none_or(str::is_empty) && r.url_file.is_none() {
+                return Err(ConfigError::Invalid(
+                    "storage.backend is redis, so storage.redis.url or url_file is required".into(),
+                ));
+            }
+            if let Some(url) = &r.url {
+                let url = url.trim();
+                if !(url.starts_with("redis://") || url.starts_with("rediss://")) {
+                    return Err(ConfigError::Invalid(
+                        "storage.redis.url must start with redis:// or rediss://".into(),
+                    ));
+                }
+            }
+            if r.key_prefix.is_empty()
+                || !r
+                    .key_prefix
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(ConfigError::Invalid(
+                    "storage.redis.key_prefix must be letters, digits, - or _".into(),
+                ));
+            }
+            if r.connect_timeout_seconds == 0 {
+                return Err(ConfigError::Invalid(
+                    "storage.redis.connect_timeout_seconds must be at least 1".into(),
+                ));
+            }
+        } else if self.storage.redis.url.is_some() || self.storage.redis.url_file.is_some() {
+            return Err(ConfigError::Invalid(
+                "storage.redis is configured but storage.backend is memory, so it would be ignored. Set storage.backend: redis, or remove it".into(),
+            ));
         }
         if self.mode == Mode::Standard {
             let o = &self.enterprise.oidc;

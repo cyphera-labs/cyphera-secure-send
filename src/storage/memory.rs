@@ -143,7 +143,12 @@ impl MessageStore for MemoryStore {
         }
     }
 
-    async fn take(&self, id: &MessageId, proof: &Proof, policy: &TakePolicy) -> TakeOutcome {
+    async fn take(
+        &self,
+        id: &MessageId,
+        proof: &Proof,
+        policy: &TakePolicy,
+    ) -> Result<TakeOutcome, StoreError> {
         let max = self.max_failed_proofs;
         let proof = proof.clone();
         let policy = policy.clone();
@@ -176,7 +181,7 @@ impl MessageStore for MemoryStore {
             })
             .await;
 
-        match result {
+        Ok(match result {
             CompResult::StillNone(_) => {
                 Verifier::dummy().matches(&proof);
                 TakeOutcome::Missing
@@ -204,10 +209,14 @@ impl MessageStore for MemoryStore {
                 }
             }
             CompResult::Inserted(_) => TakeOutcome::Missing,
-        }
+        })
     }
 
-    async fn revoke(&self, id: &MessageId, token: &RevokeToken) -> RevokeOutcome {
+    async fn revoke(
+        &self,
+        id: &MessageId,
+        token: &RevokeToken,
+    ) -> Result<RevokeOutcome, StoreError> {
         let token = token.clone();
         let result = self
             .cache
@@ -228,7 +237,7 @@ impl MessageStore for MemoryStore {
                 }
             })
             .await;
-        match result {
+        Ok(match result {
             CompResult::Removed(_) => RevokeOutcome::Revoked,
             CompResult::StillNone(_) => {
                 Verifier::dummy().matches(&token);
@@ -236,18 +245,22 @@ impl MessageStore for MemoryStore {
             }
             CompResult::Unchanged(_) => RevokeOutcome::WrongToken,
             CompResult::Inserted(_) | CompResult::ReplacedWith(_) => RevokeOutcome::Missing,
-        }
+        })
     }
 
-    async fn stats(&self) -> StoreStats {
+    async fn stats(&self) -> Result<StoreStats, StoreError> {
         self.cache.run_pending_tasks().await;
-        StoreStats {
+        Ok(StoreStats {
             active_messages: self.cache.entry_count(),
             weighted_bytes: self.cache.weighted_size(),
             budget_bytes: self.budget_bytes,
             expired_total: self.expired.load(Ordering::Relaxed),
             evicted_total: self.evicted.load(Ordering::Relaxed),
-        }
+        })
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "memory"
     }
 }
 
@@ -316,14 +329,17 @@ mod tests {
 
         // Every acknowledgement was honest.
         for (id, proof) in accepted {
-            let outcome = store.take(&id, &proof, &TakePolicy::allow_any()).await;
+            let outcome = store
+                .take(&id, &proof, &TakePolicy::allow_any())
+                .await
+                .unwrap();
             assert!(
                 matches!(outcome, TakeOutcome::Taken(_)),
                 "an acknowledged message must be retrievable"
             );
         }
         // And nothing was evicted to make that so.
-        assert_eq!(store.stats().await.evicted_total, 0);
+        assert_eq!(store.stats().await.unwrap().evicted_total, 0);
     }
 
     /// Room freed by expiry is room the next sender may use. The cache keeps
@@ -352,11 +368,11 @@ mod tests {
         let id = m.id.clone();
         s.put(m).await.unwrap();
         assert!(matches!(
-            s.take(&id, &proof, &TakePolicy::allow_any()).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::Taken(_)
         ));
         assert!(matches!(
-            s.take(&id, &proof, &TakePolicy::allow_any()).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::Missing
         ));
     }
@@ -382,7 +398,9 @@ mod tests {
             );
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
-                if let TakeOutcome::Taken(_) = s.take(&id, &proof, &TakePolicy::allow_any()).await {
+                if let TakeOutcome::Taken(_) =
+                    s.take(&id, &proof, &TakePolicy::allow_any()).await.unwrap()
+                {
                     wins.fetch_add(1, Ordering::SeqCst);
                 }
             }));
@@ -391,7 +409,7 @@ mod tests {
             h.await.unwrap();
         }
         assert_eq!(wins.load(Ordering::SeqCst), 1);
-        assert_eq!(s.stats().await.active_messages, 0);
+        assert_eq!(s.stats().await.unwrap().active_messages, 0);
     }
 
     #[tokio::test]
@@ -403,19 +421,19 @@ mod tests {
         s.put(m).await.unwrap();
         let wrong = Secret::generate().unwrap();
         assert!(matches!(
-            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::WrongProof { failed_proofs: 1 }
         ));
         assert!(matches!(
-            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::WrongProof { failed_proofs: 2 }
         ));
         assert!(matches!(
-            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::Burned { failed_proofs: 3 }
         ));
         assert!(matches!(
-            s.take(&id, &proof, &TakePolicy::allow_any()).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::Missing
         ));
     }
@@ -428,13 +446,13 @@ mod tests {
         s.put(m).await.unwrap();
         let wrong = Secret::generate().unwrap();
         assert!(matches!(
-            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::WrongProof { .. }
         ));
         tokio::time::sleep(Duration::from_millis(1300)).await;
         s.run_pending_tasks().await;
         assert!(matches!(
-            s.take(&id, &wrong, &TakePolicy::allow_any()).await,
+            s.take(&id, &wrong, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::Missing
         ));
     }
@@ -449,7 +467,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1300)).await;
         s.run_pending_tasks().await;
         assert!(matches!(
-            s.take(&id, &proof, &TakePolicy::allow_any()).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::Missing
         ));
         let events = sink.events();
@@ -465,17 +483,17 @@ mod tests {
         let (m, proof, _) = message(60);
         let id = m.id.clone();
         s.put(m).await.unwrap();
-        match s.take(&id, &proof, &TakePolicy::deny_all()).await {
+        match s.take(&id, &proof, &TakePolicy::deny_all()).await.unwrap() {
             TakeOutcome::Denied { recipient } => assert_eq!(recipient.as_str(), "b@example.com"),
             other => panic!("expected Denied, got {other:?}"),
         }
         let wrong = Secret::generate().unwrap();
         assert!(matches!(
-            s.take(&id, &wrong, &TakePolicy::deny_all()).await,
+            s.take(&id, &wrong, &TakePolicy::deny_all()).await.unwrap(),
             TakeOutcome::Denied { .. }
         ));
         assert!(matches!(
-            s.take(&id, &proof, &TakePolicy::allow_any()).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::Taken(_)
         ));
     }
@@ -487,11 +505,20 @@ mod tests {
         let id = m.id.clone();
         s.put(m).await.unwrap();
         let wrong = Secret::generate().unwrap();
-        assert_eq!(s.revoke(&id, &wrong).await, RevokeOutcome::WrongToken);
-        assert_eq!(s.revoke(&id, &revoke).await, RevokeOutcome::Revoked);
-        assert_eq!(s.revoke(&id, &revoke).await, RevokeOutcome::Missing);
+        assert_eq!(
+            s.revoke(&id, &wrong).await.unwrap(),
+            RevokeOutcome::WrongToken
+        );
+        assert_eq!(
+            s.revoke(&id, &revoke).await.unwrap(),
+            RevokeOutcome::Revoked
+        );
+        assert_eq!(
+            s.revoke(&id, &revoke).await.unwrap(),
+            RevokeOutcome::Missing
+        );
         assert!(matches!(
-            s.take(&id, &proof, &TakePolicy::allow_any()).await,
+            s.take(&id, &proof, &TakePolicy::allow_any()).await.unwrap(),
             TakeOutcome::Missing
         ));
     }
@@ -515,7 +542,7 @@ mod tests {
             }
         }
         assert!(accepted > 0 && accepted < 10);
-        let stats = s.stats().await;
+        let stats = s.stats().await.unwrap();
         assert!(stats.weighted_bytes <= 4000);
         assert_eq!(stats.active_messages, accepted);
         // Pressure is answered at the door, never by discarding what was accepted.

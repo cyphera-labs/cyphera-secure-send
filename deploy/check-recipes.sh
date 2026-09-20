@@ -25,11 +25,19 @@ failures=0
 
 note() { printf '  %s\n' "$*"; }
 
+# Secrets never travel in the configuration file; they arrive as environment
+# variables or mounted Secrets, so the checks supply them here. The Redis URL
+# is one, and is offered only to a profile that asks for that backend, since
+# a memory deployment with a Redis URL configured is itself an error.
+secret_env=("CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET=secret")
+
 check_config_file() {
   local name="$1" file="$2"
-  # The client secret never travels in the configuration file; it arrives as
-  # an environment variable or a mounted Secret, so supply one here.
-  if CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET=secret \
+  local env_for_file=("${secret_env[@]}")
+  if grep -q 'backend: redis' "$file"; then
+    env_for_file+=("CYPHERA_SECURESEND__STORAGE__REDIS__URL=redis://redis:6379")
+  fi
+  if env "${env_for_file[@]}" \
       "$binary" check-config --config "$file" > /dev/null 2>"$work/err"; then
     note "ok    $name"
   else
@@ -71,6 +79,11 @@ render external-handoff \
   --set config.enterprise.recipient.external_recipients=true \
   --set oidc.clientSecret=secret
 
+render redis-three-replicas \
+  --set storage.backend=redis \
+  --set storage.redis.url=redis://redis:6379 \
+  --set replicaCount=3
+
 # --- every environment variable the cloud templates set --------------------
 # An unknown key is refused by the configuration loader, so simply offering
 # each name with a plausible value proves the name is real and the shape fits.
@@ -92,6 +105,8 @@ for name in "${names[@]}"; do
     *__MODE) value="standard" ;;
     *EMAIL_CLAIM) value="email" ;;
     *KDF__ALGORITHM) value="pbkdf2-sha256" ;;
+    *REDIS__URL) value="redis://redis:6379" ;;
+    *KEY_PREFIX) value="securesend" ;;
     *__SINK) value="stdout" ;;
     *BACKEND) value="memory" ;;
     *COLORS__*) value="#0057b8" ;;
@@ -107,6 +122,11 @@ for name in "${names[@]}"; do
   # is loaded on top of a minimal enterprise configuration.
   base=()
   case "$name" in
+    *__STORAGE__REDIS__*)
+      base=(
+        "CYPHERA_SECURESEND__STORAGE__BACKEND=redis"
+        "CYPHERA_SECURESEND__STORAGE__REDIS__URL=redis://redis:6379"
+      ) ;;
     *__ENTERPRISE__*)
       base=(
         "CYPHERA_SECURESEND__MODE=enterprise"

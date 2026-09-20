@@ -19,11 +19,14 @@ use api::{AppState, SharedState};
 use application::{MessageLimits, MessageService};
 use audit::{AuditSink, DiscardSink, StdoutJsonSink};
 use auth::oidc::{OidcError, OidcProvider};
+use auth::session::{MemorySessionStore, SessionStore};
 use auth::{AnonymousAuthorizer, ConsumeAuthorizer, OidcAuthorizer};
 use config::{AuditSinkKind, Mode, Settings, StorageBackend};
 use domain::EnvelopeLimits;
-use storage::MessageStore;
+use std::time::Duration;
 use storage::memory::MemoryStore;
+use storage::redis::{RedisConnection, RedisSessionStore, RedisStore};
+use storage::{MessageStore, StoreError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
@@ -31,6 +34,8 @@ pub enum BuildError {
     Asset(#[from] AssetError),
     #[error(transparent)]
     Oidc(#[from] OidcError),
+    #[error("storage: {0}")]
+    Store(String),
 }
 
 /// Everything the listeners need, wired from settings. `audit_override`
@@ -47,13 +52,41 @@ pub async fn build_state(
         },
     };
 
-    let store: Arc<dyn MessageStore> = match settings.storage.backend {
-        StorageBackend::Memory => Arc::new(MemoryStore::new(
-            settings.messages.memory_budget_bytes,
-            settings.messages.max_failed_proofs,
-            audit.clone(),
-        )),
-    };
+    let session_ttl = Duration::from_secs(settings.enterprise.oidc.session_ttl_seconds);
+    let login_ttl = Duration::from_secs(settings.enterprise.oidc.login_ttl_seconds);
+    let (store, sessions): (Arc<dyn MessageStore>, Arc<dyn SessionStore>) =
+        match settings.storage.backend {
+            StorageBackend::Memory => (
+                Arc::new(MemoryStore::new(
+                    settings.messages.memory_budget_bytes,
+                    settings.messages.max_failed_proofs,
+                    audit.clone(),
+                )),
+                Arc::new(MemorySessionStore::new(session_ttl, login_ttl)),
+            ),
+            StorageBackend::Redis => {
+                let r = &settings.storage.redis;
+                let url = r
+                    .resolve_url()
+                    .map_err(|e| BuildError::Store(e.to_string()))?;
+                let conn = RedisConnection::connect(
+                    &url,
+                    &r.key_prefix,
+                    Duration::from_secs(r.connect_timeout_seconds),
+                )
+                .await
+                .map_err(|e: StoreError| BuildError::Store(e.to_string()))?;
+                (
+                    Arc::new(RedisStore::new(
+                        conn.clone(),
+                        settings.messages.memory_budget_bytes,
+                        settings.messages.max_failed_proofs,
+                        audit.clone(),
+                    )),
+                    Arc::new(RedisSessionStore::new(conn, session_ttl, login_ttl)),
+                )
+            }
+        };
 
     let (authorizer, oidc): (Arc<dyn ConsumeAuthorizer>, Option<Arc<OidcProvider>>) = match settings
         .mode
@@ -66,7 +99,8 @@ pub async fn build_state(
                 .public_base_url
                 .as_deref()
                 .unwrap_or_default();
-            let provider = OidcProvider::discover(&e.oidc, base, settings.public_https()).await?;
+            let provider =
+                OidcProvider::discover(&e.oidc, base, settings.public_https(), sessions).await?;
             let authorizer = OidcAuthorizer {
                 creation_requires_oidc: e.creation.require_oidc,
                 allowed_domains: e.creation.allowed_domains.clone(),

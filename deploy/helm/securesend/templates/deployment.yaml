@@ -19,7 +19,13 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
+    {{- if eq .Values.storage.backend "memory" }}
+    # Two copies for a moment would be two separate sets of messages.
     type: Recreate
+    {{- else }}
+    # With a shared store, replicas are interchangeable and roll normally.
+    type: RollingUpdate
+    {{- end }}
   selector:
     matchLabels:
       {{- include "securesend.selectorLabels" . | nindent 6 }}
@@ -56,6 +62,13 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           env:
+            {{- if eq .Values.storage.backend "redis" }}
+            - name: CYPHERA_SECURESEND__STORAGE__REDIS__URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "securesend.redisSecretName" . }}
+                  key: url
+            {{- end }}
             {{- if eq .Values.mode "enterprise" }}
             - name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET
               valueFrom:

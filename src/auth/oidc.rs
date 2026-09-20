@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use url::Url;
 
-use super::session::{CookieSpec, MemorySessionStore, PendingLogin, Session, SessionStore};
+use super::session::{CookieSpec, PendingLogin, Session, SessionStore};
 use crate::config::{EmailClaim, OidcSettings, UnverifiedEmail};
 use crate::domain::{Email, MessageId};
 use std::sync::Arc;
@@ -47,6 +47,10 @@ pub enum OidcError {
     Start,
     #[error("login state is unknown or expired")]
     UnknownState,
+    /// The session store cannot be reached. Not a verification failure:
+    /// the caller should try again, not be told their sign-in was bad.
+    #[error("session store unavailable: {0}")]
+    Store(String),
     #[error("token exchange failed: {0}")]
     Exchange(String),
     #[error("the provider returned no ID token")]
@@ -64,8 +68,6 @@ pub enum OidcError {
     UnverifiedEmail,
     #[error("the email claim is not a valid address")]
     BadEmail,
-    #[error("session could not be created")]
-    Session,
 }
 
 /// How often the provider's signing keys may be fetched again. Rotation is
@@ -108,6 +110,7 @@ impl OidcProvider {
         settings: &OidcSettings,
         public_base_url: &str,
         secure_cookies: bool,
+        sessions: Arc<dyn SessionStore>,
     ) -> Result<Self, OidcError> {
         let secret = settings
             .resolve_client_secret()
@@ -153,10 +156,7 @@ impl OidcProvider {
             scopes: settings.scopes.clone(),
             email_claim: settings.email_claim,
             unverified_email: settings.unverified_email,
-            sessions: Arc::new(MemorySessionStore::new(
-                Duration::from_secs(settings.session_ttl_seconds),
-                Duration::from_secs(settings.login_ttl_seconds),
-            )),
+            sessions,
             cookies: CookieSpec {
                 secure: secure_cookies,
             },
@@ -277,7 +277,8 @@ impl OidcProvider {
                     next,
                 },
             )
-            .await;
+            .await
+            .map_err(|e| OidcError::Store(e.to_string()))?;
         Ok((url, state))
     }
 
@@ -294,6 +295,7 @@ impl OidcProvider {
             .sessions
             .take_login(state)
             .await
+            .map_err(|e| OidcError::Store(e.to_string()))?
             .ok_or(OidcError::UnknownState)?;
         let (client, generation) = self.snapshot().await;
         let token = {
@@ -336,7 +338,7 @@ impl OidcProvider {
             .sessions
             .create(subject, email, self.issuer.clone())
             .await
-            .map_err(|_| OidcError::Session)?;
+            .map_err(|e| OidcError::Store(e.to_string()))?;
         Ok((id, session, pending.next))
     }
 }

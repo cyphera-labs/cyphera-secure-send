@@ -237,19 +237,23 @@ impl MessageService {
         proof: &str,
         principal: &RequestPrincipal,
         client: &ClientContext,
-    ) -> Option<Consumed> {
+    ) -> Result<Option<Consumed>, StoreError> {
         let Ok(id) = MessageId::parse(id) else {
             self.consume_failed(None, Reason::NotFound, None, client);
-            return None;
+            return Ok(None);
         };
         let Ok(proof) = Proof::from_base64url(proof) else {
             self.consume_failed(Some(&id), Reason::WrongProof, None, client);
-            return None;
+            return Ok(None);
         };
 
         let policy = self.authorizer.consume_policy(principal);
         let binding_enforced = policy.expected_recipient.is_some();
-        match self.store.take(&id, &proof, &policy).await {
+        // A store that cannot answer is not a message that is not there. The
+        // caller is told to try again, and nothing is audited as a failure
+        // of theirs.
+        let outcome = self.store.take(&id, &proof, &policy).await?;
+        Ok(match outcome {
             TakeOutcome::Taken(message) => {
                 let message = *message;
                 metrics::counter!("securesend_messages_consumed_total").increment(1);
@@ -300,7 +304,7 @@ impl MessageService {
                 self.audit.emit(event);
                 None
             }
-        }
+        })
     }
 
     fn consume_failed(
@@ -321,14 +325,20 @@ impl MessageService {
         self.audit.emit(event);
     }
 
-    /// Always succeeds from the caller's point of view.
-    pub async fn revoke(&self, id: &str, revoke_token: &str, client: &ClientContext) {
+    /// Always succeeds from the caller's point of view, unless the store
+    /// itself cannot be reached.
+    pub async fn revoke(
+        &self,
+        id: &str,
+        revoke_token: &str,
+        client: &ClientContext,
+    ) -> Result<(), StoreError> {
         let Ok(id) = MessageId::parse(id) else {
             self.audit.emit(
                 AuditEvent::failure(AuditEventType::MessageRevoked, Reason::NotFound)
                     .with_client(client),
             );
-            return;
+            return Ok(());
         };
         let Ok(token) = RevokeToken::from_base64url(revoke_token) else {
             self.audit.emit(
@@ -336,9 +346,9 @@ impl MessageService {
                     .with_message(&id)
                     .with_client(client),
             );
-            return;
+            return Ok(());
         };
-        let event = match self.store.revoke(&id, &token).await {
+        let event = match self.store.revoke(&id, &token).await? {
             RevokeOutcome::Revoked => {
                 metrics::counter!("securesend_messages_revoked_total").increment(1);
                 bump(&self.counters.revoked);
@@ -352,6 +362,7 @@ impl MessageService {
             }
         };
         self.audit.emit(event.with_message(&id).with_client(client));
+        Ok(())
     }
 }
 

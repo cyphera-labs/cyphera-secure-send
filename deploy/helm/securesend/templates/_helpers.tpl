@@ -52,10 +52,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/* The configuration file as rendered into the ConfigMap. */}}
+{{- define "securesend.redisSecretName" -}}
+{{- if .Values.storage.redis.existingSecret -}}
+{{- .Values.storage.redis.existingSecret -}}
+{{- else -}}
+{{- printf "%s-redis" (include "securesend.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "securesend.config" -}}
 {{- $cfg := deepCopy .Values.config -}}
 {{- $_ := set $cfg "mode" .Values.mode -}}
-{{- $_ := set $cfg "storage" (dict "backend" .Values.storage.backend) -}}
+{{- $storage := dict "backend" .Values.storage.backend -}}
+{{- if eq .Values.storage.backend "redis" -}}
+{{- $_ := set $storage "redis" (dict "key_prefix" .Values.storage.redis.keyPrefix) -}}
+{{- end -}}
+{{- $_ := set $cfg "storage" $storage -}}
 {{- if .Values.branding.existingConfigMap -}}
 {{- $b := index $cfg "branding" -}}
 {{- if .Values.branding.logoFile -}}{{- $_ := set $b "logo_path" (printf "/branding/%s" .Values.branding.logoFile) -}}{{- end -}}

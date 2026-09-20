@@ -81,8 +81,22 @@ caller is bounded however many addresses they come from:
 
 ## storage
 
-`backend: memory` is the only backend today. Messages live in process memory
-and vanish on restart.
+| Key | Default | Notes |
+|---|---|---|
+| `backend` | `memory` | `memory`: messages live in this process, one replica, and vanish on restart. `redis`: messages and sessions live in a Redis you run or rent, any number of replicas, and survive a restart of the service |
+| `redis.url` | unset | `redis://` or `rediss://`, password included, so keep it in a secret or use `url_file`. Never printed back by `check-config` |
+| `redis.url_file` | unset | a file holding the URL, for deployments that mount secrets |
+| `redis.key_prefix` | `securesend` | every key this service writes starts with it, so one Redis can serve more than one deployment |
+| `redis.connect_timeout_seconds` | `5` | how long startup waits for Redis before refusing to start |
+
+With Redis, `messages.memory_budget_bytes` is still the budget, enforced by
+the store's own scripts, and Redis's own `maxmemory` is the backstop. Set
+`maxmemory-policy noeviction` on it: this service never wants Redis to
+discard an accepted message to make room, and refuses new ones itself
+instead. Every operation that decides something runs as one script on the
+server, so two replicas racing for one message still produce one reader.
+Not for Redis Cluster; a single instance, a replicated pair, or a managed
+service in that shape.
 
 ## audit
 

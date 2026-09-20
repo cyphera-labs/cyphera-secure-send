@@ -19,7 +19,16 @@ imagePullSecrets: []
 replicaCount: 1
 
 storage:
+  # memory: one replica, messages live in the process. redis: any number of
+  # replicas, and messages and sessions survive a restart of the service.
   backend: memory
+  redis:
+    # The URL, password included, so it belongs in a Secret. Prefer
+    # existingSecret; setting url here stores it in a chart-managed Secret.
+    url: ""
+    # Name of a Secret with key `url`. Wins over url.
+    existingSecret: ""
+    keyPrefix: securesend
 
 # Rendered into the service's configuration file. Every key from
 # docs/configuration.md is valid here. Secrets do not belong in this map;

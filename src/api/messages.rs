@@ -204,6 +204,10 @@ pub async fn consume(
         .service
         .consume(&id, &body.proof, &principal, &ctx)
         .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "the message store cannot be reached");
+            ApiError::StoreUnavailable
+        })?
         .ok_or(ApiError::Unavailable)?;
 
     Ok(Json(ConsumeResponse {
@@ -221,6 +225,13 @@ pub async fn revoke(
     Path(id): Path<String>,
     ApiJson(body): ApiJson<RevokeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    state.service.revoke(&id, &body.revoke_token, &ctx).await;
+    state
+        .service
+        .revoke(&id, &body.revoke_token, &ctx)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "the message store cannot be reached");
+            ApiError::StoreUnavailable
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }
