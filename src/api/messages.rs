@@ -44,6 +44,9 @@ pub struct ConsumeBody {
 #[derive(Serialize)]
 pub struct ConsumeResponse {
     pub sender: String,
+    /// True when the identity provider vouched for the sender's address;
+    /// false when the sender typed it. The interface says which.
+    pub sender_authenticated: bool,
     pub recipient: String,
     pub created_at: String,
     pub envelope: EnvelopeWire,
@@ -205,6 +208,7 @@ pub async fn consume(
 
     Ok(Json(ConsumeResponse {
         sender: consumed.sender.to_string(),
+        sender_authenticated: consumed.sender_authenticated,
         recipient: consumed.recipient.to_string(),
         created_at: consumed.created_at.format(&Rfc3339).unwrap_or_default(),
         envelope: consumed.envelope.to_wire(),

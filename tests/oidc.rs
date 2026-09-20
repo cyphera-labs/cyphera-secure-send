@@ -576,6 +576,8 @@ async fn closed_mode_requires_a_session_and_binds_sender_and_recipient() {
     assert_eq!(r.status(), StatusCode::OK);
     let body: Value = r.json().await.unwrap();
     assert_eq!(body["sender"], "alice@acme.com");
+    // The provider vouched for the sender, and the customer is told so.
+    assert_eq!(body["sender_authenticated"], true);
     assert_eq!(body["recipient"], "bob@acme.com");
     let r = bob
         .post(format!("{}/v1/messages/{id}/consume", app.base))

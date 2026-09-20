@@ -57,6 +57,10 @@ test("secrets never leave the browser and the message is delivered exactly once"
   await expect(rpage.getByRole("heading", { name: "Message", exact: true })).toBeVisible();
   await expect(rpage.getByLabel("Message")).toHaveValue(SAMPLE_MESSAGE);
   await expect(rpage.getByText("alice@example.com")).toBeVisible();
+  // Nobody vouched for that address, and the reader is told so.
+  await expect(rpage.getByText(/as entered by the sender/)).toBeVisible();
+  // The link's secret does not outlive the message in the address bar.
+  expect(new URL(rpage.url()).hash).toBe("");
   for (const body of rrequests) {
     expect(body).not.toContain(SAMPLE_PASSPHRASE);
     expect(body).not.toContain(linkSecret);

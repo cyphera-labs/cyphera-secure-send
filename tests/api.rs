@@ -130,6 +130,8 @@ async fn lifecycle_create_consume_once() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["sender"], "alice@example.com");
+    // Standard mode: the sender typed it, and the reader is told so.
+    assert_eq!(body["sender_authenticated"], false);
     assert_eq!(body["envelope"]["cipher"]["name"], "AES-256-GCM");
 
     let (status, _, body) = send(

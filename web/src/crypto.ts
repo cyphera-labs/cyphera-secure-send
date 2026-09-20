@@ -63,13 +63,25 @@ export function generateLinkSecret(): string {
 }
 
 /** A memorable, high-entropy password: four words from a 2048-word list would be ideal; without a bundled list we use six groups of base32 characters (≈ 60 bits). */
+/**
+ * Three groups of four from an alphabet without look-alikes. Each character
+ * is drawn uniformly: a byte is used only when it falls inside the largest
+ * multiple of the alphabet size, so no character is favoured by the
+ * remainder of 256.
+ */
 export function suggestPassword(): string {
   const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
-  const bytes = randomBytes(12);
+  const limit = 256 - (256 % alphabet.length);
+  const wanted = 12;
   let out = "";
-  for (let i = 0; i < bytes.length; i++) {
-    if (i > 0 && i % 4 === 0) out += "-";
-    out += alphabet[bytes[i]! % alphabet.length];
+  let drawn = 0;
+  while (drawn < wanted) {
+    for (const byte of randomBytes(wanted)) {
+      if (byte >= limit) continue;
+      if (drawn > 0 && drawn % 4 === 0) out += "-";
+      out += alphabet[byte % alphabet.length];
+      if (++drawn === wanted) break;
+    }
   }
   return out;
 }
@@ -129,25 +141,50 @@ export async function seal(plaintext: string, password: string, iterations: numb
   };
 }
 
+/**
+ * What a recipient holds between proving and decrypting: the proof to send,
+ * and the key kept back for the ciphertext that comes back. One derivation
+ * serves both, so the wait is paid once, not twice.
+ */
+export interface Prepared {
+  proof: string;
+  encKey: CryptoKey;
+}
+
+/** Derives everything the recipient needs from the link and the password. */
+export async function prepare(
+  password: string,
+  linkSecret: string,
+  salt: string,
+  iterations: number,
+): Promise<Prepared> {
+  const keys = await deriveKeys(password, base64url.decode(linkSecret), base64.decode(salt), iterations);
+  const proof = base64url.encode(keys.proof);
+  keys.proof.fill(0);
+  return { proof, encKey: keys.encKey };
+}
+
+/** Decrypts an envelope with a key already derived by `prepare`. */
+export async function openWith(envelope: Envelope, encKey: CryptoKey): Promise<string> {
+  assertSupported(envelope);
+  const plain = await subtle.decrypt(
+    { name: "AES-GCM", iv: base64.decode(envelope.cipher.iv), additionalData: utf8.encode(AAD), tagLength: 128 },
+    encKey,
+    base64.decode(envelope.ciphertext),
+  );
+  return utf8.decode(new Uint8Array(plain));
+}
+
 /** Derives the consume proof for an envelope without decrypting anything. */
 export async function proofFor(envelope: Envelope, password: string, linkSecret: string): Promise<string> {
   assertSupported(envelope);
-  const keys = await deriveKeys(password, base64url.decode(linkSecret), base64.decode(envelope.kdf.salt), envelope.kdf.iterations);
-  const proof = base64url.encode(keys.proof);
-  keys.proof.fill(0);
-  return proof;
+  return (await prepare(password, linkSecret, envelope.kdf.salt, envelope.kdf.iterations)).proof;
 }
 
 export async function open(envelope: Envelope, password: string, linkSecret: string): Promise<string> {
   assertSupported(envelope);
-  const keys = await deriveKeys(password, base64url.decode(linkSecret), base64.decode(envelope.kdf.salt), envelope.kdf.iterations);
-  keys.proof.fill(0);
-  const plain = await subtle.decrypt(
-    { name: "AES-GCM", iv: base64.decode(envelope.cipher.iv), additionalData: utf8.encode(AAD), tagLength: 128 },
-    keys.encKey,
-    base64.decode(envelope.ciphertext),
-  );
-  return utf8.decode(new Uint8Array(plain));
+  const { encKey } = await prepare(password, linkSecret, envelope.kdf.salt, envelope.kdf.iterations);
+  return openWith(envelope, encKey);
 }
 
 function assertSupported(envelope: Envelope): void {

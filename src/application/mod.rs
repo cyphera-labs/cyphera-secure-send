@@ -67,6 +67,9 @@ pub struct Created {
 #[derive(Debug)]
 pub struct Consumed {
     pub sender: Email,
+    /// Whether the sender's address came from the identity provider rather
+    /// than from the sender. The reader is shown the difference.
+    pub sender_authenticated: bool,
     pub recipient: Email,
     pub created_at: OffsetDateTime,
     pub envelope: Envelope,
@@ -262,6 +265,7 @@ impl MessageService {
                 self.audit.emit(event);
                 Some(Consumed {
                     sender: message.sender,
+                    sender_authenticated: message.sender_authenticated,
                     recipient: message.recipient,
                     created_at: message.created_at,
                     envelope: message.envelope,

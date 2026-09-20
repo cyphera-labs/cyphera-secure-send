@@ -31,8 +31,10 @@ config:
     # is none.
     public_base_url: null
     hsts: true
-    # Pod networks and the ingress controller. X-Forwarded-For is honored
-    # only from these ranges.
+    # The ingress controller's pod network, so X-Forwarded-For is honored
+    # from it and each client is limited separately. Required when ingress
+    # is enabled: set this, or trusted_hops (the number of proxies in
+    # front) when the controller's addresses are not knowable. Never both.
     trusted_proxies: []
   messages:
     ttl_options_seconds: [300, 900, 3600, 28800, 86400]

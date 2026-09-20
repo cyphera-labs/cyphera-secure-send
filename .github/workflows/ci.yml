@@ -97,7 +97,7 @@ jobs:
       - run: cargo build --release --locked
       - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
-          tool: cargo-cyclonedx
+          tool: cargo-cyclonedx@0.5.9
       - run: cargo cyclonedx --format json --override-filename cyphera-secure-send.cyclonedx
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -176,6 +176,10 @@ jobs:
           if helm template securesend deploy/helm/securesend --set replicaCount=2 > /dev/null 2>&1; then
             echo "the memory-backend replica guard did not fire" >&2; exit 1
           fi
+          if helm template securesend deploy/helm/securesend --set ingress.enabled=true > /dev/null 2>&1; then
+            echo "the ingress guard did not fire without a proxy setting" >&2; exit 1
+          fi
+          helm template securesend deploy/helm/securesend --set ingress.enabled=true --set config.server.trusted_hops=1 > /dev/null
           if helm template securesend deploy/helm/securesend --set mode=enterprise > /dev/null 2>&1; then
             echo "the enterprise guard did not fire without a public base url" >&2; exit 1
           fi

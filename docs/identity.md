@@ -225,5 +225,5 @@ networks does not widen what one account can do.
 ## Private certificate authorities
 
 If the provider's certificate is issued by a private CA, point
-`auth.oidc.trust_ca_path` at a PEM bundle. It is trusted in addition to the
+`enterprise.oidc.trust_ca_path` at a PEM bundle. It is trusted in addition to the
 system roots.

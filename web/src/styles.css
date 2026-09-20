@@ -176,3 +176,9 @@ button:not(:disabled):hover { filter: brightness(0.95); }
   .row { flex-wrap: wrap; }
   .row > input { flex-basis: 100%; }
 }
+
+/* A qualification beside a fact, quieter than the fact. */
+.muted {
+  color: var(--md-sys-color-on-surface-variant, #5f6368);
+  font-size: 0.9em;
+}

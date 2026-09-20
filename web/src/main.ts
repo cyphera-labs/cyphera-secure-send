@@ -1,6 +1,6 @@
 import "./styles.css";
 import { ApiError, api, loadSession, loadUiConfig, logout, type SessionView, type UiConfig } from "./api";
-import { decodeFragment, encodeFragment, open, proofFor, seal, suggestPassword } from "./crypto";
+import { decodeFragment, encodeFragment, openWith, prepare, seal, suggestPassword } from "./crypto";
 import { byteLength, clear, copyToClipboard, formatDuration, formatTime, h } from "./dom";
 
 const root = document.getElementById("app") as HTMLElement;
@@ -361,18 +361,18 @@ function reveal(id: string): void {
     password.disabled = true;
     busy(submit, true, "Checking…");
     try {
-      const envelopeForProof = {
-        version: 1,
-        kdf: { name: "PBKDF2-SHA256", iterations: params!.iterations, salt: params!.salt },
-        cipher: { name: "AES-256-GCM", iv: "" },
-        ciphertext: "",
-      };
-      const proof = await proofFor(envelopeForProof, secret, params!.linkSecret);
-      const consumed = await api.consume(id, proof);
+      // One derivation: the proof goes to the server, the key stays here
+      // for the ciphertext that comes back.
+      const keys = await prepare(secret, params!.linkSecret, params!.salt, params!.iterations);
+      const consumed = await api.consume(id, keys.proof);
       busy(submit, true, "Decrypting…");
-      const plain = await open(consumed.envelope, secret, params!.linkSecret);
+      const plain = await openWith(consumed.envelope, keys.encKey);
       password.value = "";
-      revealedView(plain, consumed.sender);
+      // The message is gone from the server; the link's secret has no
+      // further use and should not outlive it in the address bar, the
+      // tab's history, or whatever syncs that history elsewhere.
+      history.replaceState(null, "", location.pathname);
+      revealedView(plain, consumed.sender, consumed.sender_authenticated);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
         status.append(notice("error", "The password may be wrong, or the message is no longer available. Check the password and try again."));
@@ -388,7 +388,7 @@ function reveal(id: string): void {
   password.focus();
 }
 
-function revealedView(plain: string, sender: string): void {
+function revealedView(plain: string, sender: string, senderAuthenticated: boolean): void {
   const text = h("textarea", { class: "plain", readonly: true, rows: "10", spellcheck: "false", "aria-label": "Message" });
   text.value = plain;
   const copy = h("button", { type: "button", class: "tonal-button", onclick: async () => {
@@ -400,7 +400,12 @@ function revealedView(plain: string, sender: string): void {
   page(
     h("section", { class: "card" },
       h("h1", {}, "Message"),
-      h("dl", { class: "facts" }, h("dt", {}, "From"), h("dd", {}, sender)),
+      h("dl", { class: "facts" },
+        h("dt", {}, "From"),
+        // An address the sender typed is a claim, and it says so; an
+        // address the identity provider vouched for does not need to.
+        h("dd", {}, sender, senderAuthenticated ? "" : h("span", { class: "muted" }, " (as entered by the sender, not verified)")),
+      ),
       text,
       notice("warn", "This message has been destroyed on the server. Do not refresh or leave this page until you have what you need."),
       h("div", { class: "actions" }, copy),

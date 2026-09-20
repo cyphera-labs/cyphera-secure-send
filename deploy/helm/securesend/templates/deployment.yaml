@@ -4,6 +4,12 @@
 {{- if and (eq .Values.mode "enterprise") (not (index .Values.config "server" "public_base_url")) -}}
 {{- fail "securesend: mode enterprise requires config.server.public_base_url" -}}
 {{- end -}}
+{{- /* Behind an ingress every request arrives from the controller, so without
+       a way to read the forwarded address every client shares one rate-limit
+       bucket and the whole service is throttled together. */ -}}
+{{- if and .Values.ingress.enabled (not (index .Values.config "server" "trusted_proxies")) (not (index .Values.config "server" "trusted_hops")) -}}
+{{- fail "securesend: ingress is enabled but neither config.server.trusted_proxies nor config.server.trusted_hops is set, so every client would share one rate-limit bucket. Name the controller's pod network in trusted_proxies, or set trusted_hops to the number of proxies in front" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

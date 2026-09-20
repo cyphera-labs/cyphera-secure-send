@@ -45,7 +45,12 @@ Rolling your own instead: a single-replica Deployment with a `Recreate`
 strategy. What matters:
 
 - **Probes.** `GET /livez` and `GET /readyz` on the management port (9090 in
-  the image). Readiness turns to 503 the moment shutdown starts.
+  the image). Readiness turns to 503 the moment shutdown starts. Note that
+  the image binds that port on all interfaces, not the loopback default the
+  configuration reference gives, because a probe from outside the container
+  cannot reach loopback. It is still a private port: publish or route only
+  8080, and keep 9090 to the pod network. `/metrics` and `/v1/stats` carry
+  no secrets but describe the service to anyone who can reach them.
 - **Shutdown.** SIGTERM drains for `server.shutdown_timeout_seconds`, then
   exits. Pending messages are discarded on every restart, by design, so
   a rolling deploy loses messages that have not been read. Say so in your
@@ -164,7 +169,13 @@ The interface loads nothing from outside the service.
 
 ## Verifying a release
 
-Every release ships signed binaries, a signed multi-architecture image,
-CycloneDX and SPDX SBOMs, and build provenance attestations. Each signed file
-has a `.sigstore.json` bundle beside it; the release notes carry the exact
-`cosign verify-blob` command and the image digest.
+Every release ships signed binaries, a signed multi-architecture image, a
+signed Helm chart, CycloneDX and SPDX SBOMs, and build provenance
+attestations. Each signed file has a `.sigstore.json` bundle beside it; the
+release notes carry the exact `cosign verify-blob` command, the image
+digest, and the chart digest with the `cosign verify` command for each.
+Install the chart by the digest you verified rather than by version:
+
+```sh
+helm install securesend oci://ghcr.io/cyphera-labs/charts/securesend@sha256:<digest>
+```

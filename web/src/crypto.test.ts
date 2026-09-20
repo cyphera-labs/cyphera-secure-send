@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { base64, base64url } from "./encoding";
-import { decodeFragment, encodeFragment, open, proofFor, seal, sha256 } from "./crypto";
+import { decodeFragment, encodeFragment, open, proofFor, seal, sha256, suggestPassword } from "./crypto";
 
 const ITER = 1000;
 
@@ -89,5 +89,30 @@ describe("fragment", () => {
     expect(decodeFragment("#a.b")).toBeNull();
     expect(decodeFragment("#" + "a".repeat(43) + "." + "b".repeat(22) + ".zz zz")).toBeNull();
     expect(decodeFragment("#" + "a".repeat(42) + "." + "b".repeat(22) + ".1")).toBeNull();
+  });
+});
+
+describe("suggestPassword", () => {
+  it("draws every character uniformly from the alphabet", () => {
+    const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+    const counts = new Map<string, number>();
+    let total = 0;
+    for (let i = 0; i < 4000; i++) {
+      const p = suggestPassword();
+      expect(p).toMatch(/^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$/);
+      for (const c of p.replaceAll("-", "")) {
+        expect(alphabet).toContain(c);
+        counts.set(c, (counts.get(c) ?? 0) + 1);
+        total++;
+      }
+    }
+    // 48,000 draws over 31 symbols: about 1,548 each. A byte reduced modulo
+    // 31 would favour the first eight symbols by an eighth, which is far
+    // outside the spread of a uniform draw at this sample size.
+    const expected = total / alphabet.length;
+    for (const c of alphabet) {
+      const n = counts.get(c) ?? 0;
+      expect(Math.abs(n - expected) / expected).toBeLessThan(0.08);
+    }
   });
 });

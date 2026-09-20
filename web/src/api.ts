@@ -52,6 +52,8 @@ export interface CreateResponse {
 
 export interface ConsumeResponse {
   sender: string;
+  /** Whether the sender's address came from the identity provider rather than the sender. */
+  sender_authenticated: boolean;
   recipient: string;
   created_at: string;
   envelope: Envelope;
