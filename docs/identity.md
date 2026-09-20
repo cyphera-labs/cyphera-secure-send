@@ -198,17 +198,29 @@ discards every pending message.
 ## Revoking a sender
 
 Audit events carry the issuer and the subject alongside the address. The
-subject is the stable identifier; addresses change. To stop someone creating
-handoffs, disable or remove them at the identity provider, or drop them from
-whichever group or domain your configuration admits.
+subject is the stable identifier; addresses change. Revoking someone is two
+steps, and both matter:
 
-**A session already established keeps working.** Disabling an account at the
-provider prevents the next sign-in; it does not reach into sessions this
-service is already holding, which last `session_ttl_seconds`, eight hours by
-default. Shorten that lifetime if the gap matters to you. There is no remote
-sign-out yet, so the only immediate remedy is restarting the service, which
-ends every session and discards every pending message with them. Say which
-of those you are willing to do before you need to decide.
+1. **Disable or remove the account at the identity provider**, or drop it
+   from whichever group or domain your configuration admits. That stops
+   the next sign-in.
+2. **End the sessions they already hold.** Signing in gives the browser a
+   session that lasts `session_ttl_seconds`, eight hours by default, and
+   the provider has no way to reach into it. On the management listener:
+
+   ```sh
+   curl -X POST http://127.0.0.1:9090/v1/sessions/revoke \
+     -H 'content-type: application/json' \
+     -d '{"subject": "<subject from the audit event>"}'
+   ```
+
+   or `{"email": "person@example.com"}` when the subject is not to hand.
+   The answer says how many sessions ended, and an `auth.sessions_revoked`
+   event records it. Their next request is anonymous, and their next
+   sign-in is the provider's to refuse.
+
+Do the second without the first and they sign in again. Do the first
+without the second and they keep working until their session expires.
 
 Per-identity rate limits apply on top, keyed on the subject, so switching
 networks does not widen what one account can do.

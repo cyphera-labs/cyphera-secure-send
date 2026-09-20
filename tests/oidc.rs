@@ -21,6 +21,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use cyphera_secure_send::api::management::{self, ManagementState};
 use cyphera_secure_send::api::public_router;
 use cyphera_secure_send::audit::{MemorySink, Reason};
 use cyphera_secure_send::config::{EmailClaim, Mode, Settings, UnverifiedEmail};
@@ -258,6 +259,8 @@ async fn start_idp() -> Arc<Idp> {
 
 struct App {
     base: String,
+    /// The operator's listener, on its own port as in a deployment.
+    management: String,
     audit: Arc<MemorySink>,
 }
 
@@ -281,9 +284,32 @@ async fn start_app(idp: &Idp, tweak: impl FnOnce(&mut Settings)) -> App {
     let state = cyphera_secure_send::build_state(settings, Some(audit.clone()))
         .await
         .unwrap();
-    let router = public_router(state).into_make_service_with_connect_info::<SocketAddr>();
+    let router = public_router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    App { base, audit }
+
+    static RECORDER: std::sync::OnceLock<metrics_exporter_prometheus::PrometheusHandle> =
+        std::sync::OnceLock::new();
+    let prometheus = RECORDER
+        .get_or_init(|| {
+            metrics_exporter_prometheus::PrometheusBuilder::new()
+                .install_recorder()
+                .expect("one recorder per process")
+        })
+        .clone();
+    let mgmt_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let management = format!("http://{}", mgmt_listener.local_addr().unwrap());
+    let mgmt = management::router(Arc::new(ManagementState::new(
+        state,
+        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        prometheus,
+    )));
+    tokio::spawn(async move { axum::serve(mgmt_listener, mgmt).await.unwrap() });
+
+    App {
+        base,
+        management,
+        audit,
+    }
 }
 
 fn client() -> reqwest::Client {
@@ -1007,6 +1033,82 @@ async fn the_sign_in_door_is_rate_limited() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(*idp.token_calls.lock().unwrap(), calls_before);
+}
+
+/// Disabling an account at the provider stops its next sign-in. The
+/// operator's listener ends the sessions it already holds, so between the
+/// two, revocation is immediate rather than "within eight hours".
+#[tokio::test]
+async fn an_operator_can_end_an_accounts_sessions_now() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |_| {}).await;
+
+    // Alice holds two sessions, Bob one.
+    let alice_a = client();
+    sign_in(&app, &idp, &alice_a, "alice@acme.com", "/").await;
+    let alice_b = client();
+    sign_in(&app, &idp, &alice_b, "alice@acme.com", "/").await;
+    let bob = client();
+    sign_in(&app, &idp, &bob, "bob@acme.com", "/").await;
+
+    let session = |c: &reqwest::Client| {
+        let url = format!("{}/v1/session", app.base);
+        let c = c.clone();
+        async move {
+            c.get(url)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(session(&alice_a).await["authenticated"], true);
+
+    // The operator names her by address, since that is what they know.
+    let r = reqwest::Client::new()
+        .post(format!("{}/v1/sessions/revoke", app.management))
+        .json(&json!({"email": "alice@acme.com"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let v: Value = r.json().await.unwrap();
+    assert_eq!(v["sessions_ended"], 2);
+
+    // Both of Alice's browsers are anonymous now; Bob is untouched.
+    assert_eq!(session(&alice_a).await["authenticated"], false);
+    assert_eq!(session(&alice_b).await["authenticated"], false);
+    assert_eq!(session(&bob).await["authenticated"], true);
+
+    // And anonymous means she cannot create until she signs in again,
+    // which is the provider's to allow or refuse.
+    let (_, verifier) = proof_and_verifier(9);
+    let r = alice_a
+        .post(format!("{}/v1/messages", app.base))
+        .json(&create_body("alice@acme.com", "bob@acme.com", &verifier))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+
+    // Recorded, with who was named.
+    let events = app.audit.events();
+    let revoked = events
+        .iter()
+        .find(|e| e.event_type == "auth.sessions_revoked")
+        .expect("an audit event for the revocation");
+    assert_eq!(revoked.sender.as_deref(), Some("alice@acme.com"));
+
+    // Naming nobody is refused.
+    let r = reqwest::Client::new()
+        .post(format!("{}/v1/sessions/revoke", app.management))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

@@ -45,6 +45,35 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<(String, Session), ()>;
     async fn get(&self, id: &str) -> Option<Session>;
     async fn revoke(&self, id: &str);
+    /// Ends every session held by one account, and returns how many. This
+    /// is what makes "disable them at the provider" take effect now rather
+    /// than when their sessions would have expired: the provider stops the
+    /// next sign-in, this stops the current ones.
+    async fn revoke_account(&self, account: &AccountRef) -> u64;
+}
+
+/// One account, as an operator would name it: by the stable subject the
+/// provider issued, or by the address it carried. The address is a
+/// convenience for the operator, who usually knows it and rarely knows the
+/// subject; a match on either ends the session.
+#[derive(Clone, Debug)]
+pub struct AccountRef {
+    pub subject: Option<String>,
+    pub email: Option<Email>,
+}
+
+impl AccountRef {
+    pub fn matches(&self, session: &Session) -> bool {
+        let by_subject = self
+            .subject
+            .as_deref()
+            .is_some_and(|s| s == session.subject);
+        let by_email = self
+            .email
+            .as_ref()
+            .is_some_and(|e| e.as_str().eq_ignore_ascii_case(session.email.as_str()));
+        by_subject || by_email
+    }
 }
 
 pub struct MemorySessionStore {
@@ -112,6 +141,19 @@ impl SessionStore for MemorySessionStore {
 
     async fn revoke(&self, id: &str) {
         self.sessions.remove(id).await;
+    }
+
+    async fn revoke_account(&self, account: &AccountRef) -> u64 {
+        let ids: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| account.matches(session))
+            .map(|(id, _)| id.as_ref().clone())
+            .collect();
+        for id in &ids {
+            self.sessions.remove(id).await;
+        }
+        ids.len() as u64
     }
 }
 
@@ -209,6 +251,61 @@ mod tests {
         );
         store.revoke(&id).await;
         assert!(store.get(&id).await.is_none());
+    }
+
+    /// Ending an account's sessions ends all of them, and no one else's,
+    /// whether the operator names the subject or the address.
+    #[tokio::test]
+    async fn revoking_an_account_ends_every_session_it_holds_and_no_others() {
+        let store = MemorySessionStore::new(Duration::from_secs(60), Duration::from_secs(60));
+        let alice = Email::parse("alice@example.com").unwrap();
+        let bob = Email::parse("bob@example.com").unwrap();
+        let (a1, _) = store
+            .create("alice-sub".into(), alice.clone(), "iss".into())
+            .await
+            .unwrap();
+        let (a2, _) = store
+            .create("alice-sub".into(), alice.clone(), "iss".into())
+            .await
+            .unwrap();
+        let (b1, _) = store
+            .create("bob-sub".into(), bob, "iss".into())
+            .await
+            .unwrap();
+
+        let ended = store
+            .revoke_account(&AccountRef {
+                subject: Some("alice-sub".into()),
+                email: None,
+            })
+            .await;
+        assert_eq!(ended, 2);
+        assert!(store.get(&a1).await.is_none());
+        assert!(store.get(&a2).await.is_none());
+        assert!(store.get(&b1).await.is_some());
+
+        // By address, case-insensitively, and nothing left to end afterwards.
+        let (a3, _) = store
+            .create("alice-sub".into(), alice, "iss".into())
+            .await
+            .unwrap();
+        let ended = store
+            .revoke_account(&AccountRef {
+                subject: None,
+                email: Some(Email::parse("ALICE@example.com").unwrap()),
+            })
+            .await;
+        assert_eq!(ended, 1);
+        assert!(store.get(&a3).await.is_none());
+        assert_eq!(
+            store
+                .revoke_account(&AccountRef {
+                    subject: Some("alice-sub".into()),
+                    email: None
+                })
+                .await,
+            0
+        );
     }
 
     #[test]

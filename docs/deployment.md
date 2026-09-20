@@ -83,6 +83,7 @@ because they reveal how much traffic the service carries.
 | `GET /readyz` | `200` while serving, `503` once shutdown has begun; wire this to the orchestrator |
 | `GET /v1/health` | JSON: status, readiness, version, uptime, and store occupancy (active messages, used and budget bytes, percent) |
 | `GET /v1/stats` | JSON: the same store view plus lifecycle totals since start (created, consumed, consume_failed, burned, revoked, expired, evicted, access_denied, rate_limited) and the effective limits |
+| `POST /v1/sessions/revoke` | enterprise mode: ends every session one account holds, now. Body `{"subject": "..."}` or `{"email": "..."}`; answers with how many were ended. Pair it with disabling the account at the provider, which stops the next sign-in |
 | `GET /metrics` | Prometheus text format |
 
 `/v1/stats` is what a dashboard or a runbook check should read. Totals reset when the process restarts, like everything else here.
@@ -133,6 +134,7 @@ lives minutes to hours, but say so in your runbook.
 | `securesend_audit_dropped_total` | counter | audit lines dropped because the output could not keep up; anything above zero means the collector stalled |
 | `securesend_auth_logins_total` | counter | enterprise mode: completed sign-ins |
 | `securesend_auth_failures_total` | counter | enterprise mode: sign-ins refused |
+| `securesend_sessions_revoked_total` | counter | enterprise mode: sessions ended by an operator |
 | `securesend_messages_access_denied_total` | counter |
 | `securesend_rate_limited_total{endpoint}` | counter |
 | `securesend_messages_active` | gauge |
@@ -145,6 +147,7 @@ One JSON object per line on stdout. Types:
 
 `message.created`, `message.consumed`, `message.consume_failed`,
 `message.burned`, `message.revoked`, `message.expired`, `message.evicted`,
+`auth.sessions_revoked`,
 `message.access_denied`, `rate_limited`, `server.started`, `server.stopping`.
 
 Fields (present when relevant): `event_id`, `type`, `time`, `outcome`,

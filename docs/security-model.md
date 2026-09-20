@@ -149,6 +149,7 @@ Each of these is enforced by a test.
 | A compromised identity provider | partly | it can mint any identity, so in enterprise mode it can create as anyone and satisfy any recipient binding; it still cannot read a message without the link and the password, which never reach it |
 | Flooding the audit log | yes | audit lines are queued for a separate writer and dropped, counted, when the queue is full; a request never waits on the log |
 | An observer on the management port | partly | `/metrics` and `/v1/stats` carry no secrets but describe activity; the port is loopback by default and must stay off the public network |
+| A sender disabled at the provider, mid-session | yes | the provider stops their next sign-in; the management listener's session revocation ends the ones they hold, now; see the identity guide |
 | Compromised endpoint or browser | no | out of scope |
 | A malicious sender | no | the product moves what the sender typed |
 

@@ -30,6 +30,7 @@ pub enum AuditEventType {
     AuthLogin,
     AuthLoginFailed,
     AuthLogout,
+    AuthSessionsRevoked,
     ServerStarted,
     ServerStopping,
 }
@@ -49,6 +50,7 @@ impl AuditEventType {
             Self::AuthLogin => "auth.login",
             Self::AuthLoginFailed => "auth.login_failed",
             Self::AuthLogout => "auth.logout",
+            Self::AuthSessionsRevoked => "auth.sessions_revoked",
             Self::ServerStarted => "server.started",
             Self::ServerStopping => "server.stopping",
         }

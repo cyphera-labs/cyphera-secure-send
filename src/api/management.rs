@@ -7,8 +7,9 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use metrics_exporter_prometheus::PrometheusHandle;
+use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +19,9 @@ use time::format_description::well_known::Rfc3339;
 
 use super::SharedState;
 use crate::application::CounterSnapshot;
+use crate::audit::{AuditEvent, AuditEventType};
+use crate::auth::session::AccountRef;
+use crate::domain::Email;
 
 #[derive(Serialize)]
 pub struct Health {
@@ -186,12 +190,89 @@ async fn metrics(State(state): State<Arc<ManagementState>>) -> impl IntoResponse
     )
 }
 
+/// One account to sign out everywhere, named the way an operator knows it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeSessionsBody {
+    /// The stable identifier the provider issued, as audit events carry it.
+    pub subject: Option<String>,
+    /// The address, for when the subject is not to hand.
+    pub email: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RevokeSessionsResponse {
+    pub sessions_ended: u64,
+}
+
+/// Ends every session one account holds, now. Disabling the account at the
+/// provider stops its next sign-in; this stops the ones it already has, so
+/// the two together make revocation immediate. It lives on the management
+/// listener because that listener is the operator's, and reachable only
+/// where the deployment lets operators reach it.
+async fn revoke_sessions(
+    State(state): State<Arc<ManagementState>>,
+    Json(body): Json<RevokeSessionsBody>,
+) -> impl IntoResponse {
+    let Some(oidc) = &state.app.oidc else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(
+                serde_json::json!({"error": "no sessions: the service is not in enterprise mode"}),
+            ),
+        )
+            .into_response();
+    };
+    let email = match body.email.as_deref().map(Email::parse) {
+        None => None,
+        Some(Ok(email)) => Some(email),
+        Some(Err(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "email is not a valid address"})),
+            )
+                .into_response();
+        }
+    };
+    let subject = body.subject.filter(|s| !s.trim().is_empty());
+    if subject.is_none() && email.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "name the account by subject or by email"})),
+        )
+            .into_response();
+    }
+    let account = AccountRef { subject, email };
+    let ended = oidc.sessions.revoke_account(&account).await;
+
+    metrics::counter!("securesend_sessions_revoked_total").increment(ended);
+    let mut event = AuditEvent::success(AuditEventType::AuthSessionsRevoked);
+    event.subject = account.subject.clone();
+    event.issuer = Some(oidc.issuer().to_owned());
+    event.sender = account.email.as_ref().map(ToString::to_string);
+    event.active_messages = None;
+    state.app.audit.emit(event);
+    tracing::info!(
+        sessions_ended = ended,
+        "an operator ended an account's sessions"
+    );
+
+    (
+        StatusCode::OK,
+        Json(RevokeSessionsResponse {
+            sessions_ended: ended,
+        }),
+    )
+        .into_response()
+}
+
 pub fn router(state: Arc<ManagementState>) -> Router {
     Router::new()
         .route("/livez", get(livez))
         .route("/readyz", get(readyz))
         .route("/v1/health", get(detailed_health))
         .route("/v1/stats", get(stats))
+        .route("/v1/sessions/revoke", post(revoke_sessions))
         .route("/metrics", get(metrics))
         .with_state(state)
 }
