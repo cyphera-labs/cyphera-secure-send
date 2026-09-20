@@ -166,6 +166,10 @@ fn serve(settings: Settings) -> Result<(), String> {
         let _ = public_task.await;
         maintenance.abort();
         mgmt_task.abort();
+        // The stopping event and whatever preceded it are queued for the
+        // writer; give it a moment to land them before the process ends.
+        let audit = state.audit.clone();
+        let _ = tokio::task::spawn_blocking(move || audit.flush(Duration::from_secs(5))).await;
         Ok::<(), String>(())
     })
 }

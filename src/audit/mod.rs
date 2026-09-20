@@ -7,6 +7,9 @@
 use serde::Serialize;
 use std::io::Write;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::SyncSender;
+use std::time::Duration;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -211,18 +214,72 @@ fn random_event_id() -> String {
 
 pub trait AuditSink: Send + Sync {
     fn emit(&self, event: AuditEvent);
+
+    /// Waits, up to the given time, for everything emitted so far to reach
+    /// its destination. Called once at shutdown so the final events land.
+    fn flush(&self, _wait: Duration) {}
 }
 
-/// One JSON object per line on standard output.
+/// One JSON object per line on standard output, written by its own thread.
+///
+/// A request must never wait on the log. Standard output is a pipe to
+/// whatever collects it, and a collector that stalls would otherwise stall
+/// every handler behind one lock, then the liveness probe, then the whole
+/// process, and a restart discards every pending message. So handlers hand
+/// the line to a bounded queue and carry on; the writer thread does the
+/// blocking work. When the queue is full the line is dropped and counted,
+/// which is the honest outcome: a log that cannot keep up loses records, and
+/// the count says how many.
 pub struct StdoutJsonSink {
-    out: Mutex<std::io::Stdout>,
+    queue: SyncSender<Item>,
+    dropped: AtomicU64,
 }
+
+enum Item {
+    Line(String),
+    /// Answered once everything queued before it has been written.
+    Flush(SyncSender<()>),
+}
+
+/// How many lines may wait for the writer before new ones are dropped.
+const AUDIT_QUEUE_LINES: usize = 8192;
 
 impl StdoutJsonSink {
     pub fn new() -> Self {
+        Self::with_writer(std::io::stdout())
+    }
+
+    /// The same sink over any destination. Exists so a test can stall the
+    /// destination and prove callers are not stalled with it.
+    pub fn with_writer(out: impl Write + Send + 'static) -> Self {
+        let (queue, inbox) = std::sync::mpsc::sync_channel::<Item>(AUDIT_QUEUE_LINES);
+        std::thread::Builder::new()
+            .name("audit-writer".to_owned())
+            .spawn(move || {
+                let mut out = out;
+                for item in inbox {
+                    match item {
+                        Item::Line(line) => {
+                            let _ = writeln!(out, "{line}");
+                        }
+                        Item::Flush(ack) => {
+                            let _ = out.flush();
+                            let _ = ack.send(());
+                        }
+                    }
+                }
+                let _ = out.flush();
+            })
+            .expect("spawn the audit writer thread");
         Self {
-            out: Mutex::new(std::io::stdout()),
+            queue,
+            dropped: AtomicU64::new(0),
         }
+    }
+
+    /// Lines dropped because the queue was full.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 }
 
@@ -237,12 +294,25 @@ impl AuditSink for StdoutJsonSink {
         let Ok(line) = serde_json::to_string(&event) else {
             return;
         };
-        let mut out = match self.out.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let _ = writeln!(out, "{line}");
-        let _ = out.flush();
+        if self.queue.try_send(Item::Line(line)).is_err() {
+            let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            metrics::counter!("securesend_audit_dropped_total").increment(1);
+            // Loud once, then at widening intervals, so a stalled collector
+            // does not also flood the application log.
+            if dropped.is_power_of_two() {
+                tracing::warn!(
+                    dropped,
+                    "audit output cannot keep up; records are being dropped"
+                );
+            }
+        }
+    }
+
+    fn flush(&self, wait: Duration) {
+        let (ack, done) = std::sync::mpsc::sync_channel(1);
+        if self.queue.send(Item::Flush(ack)).is_ok() {
+            let _ = done.recv_timeout(wait);
+        }
     }
 }
 
@@ -269,5 +339,52 @@ impl AuditSink for MemorySink {
         if let Ok(mut events) = self.events.lock() {
             events.push(event);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A destination that blocks until released, standing in for a log
+    /// collector that has stopped reading.
+    struct Stalled(std::sync::Arc<(Mutex<bool>, std::sync::Condvar)>);
+
+    impl Write for Stalled {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let (open, released) = &*self.0;
+            let mut open = open.lock().unwrap();
+            while !*open {
+                open = released.wait(open).unwrap();
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The property the design rests on: a request never waits on the log.
+    #[test]
+    fn a_stalled_destination_does_not_stall_callers() {
+        let gate = std::sync::Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let sink = StdoutJsonSink::with_writer(Stalled(gate.clone()));
+
+        let started = std::time::Instant::now();
+        for _ in 0..(AUDIT_QUEUE_LINES + 500) {
+            sink.emit(AuditEvent::success(AuditEventType::ServerStarted));
+        }
+        // Well past the queue's depth, and still no caller has waited.
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(
+            sink.dropped() >= 400,
+            "overflow must be counted, got {}",
+            sink.dropped()
+        );
+
+        // Release the destination and the queued lines drain.
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        sink.flush(Duration::from_secs(5));
     }
 }

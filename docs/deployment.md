@@ -124,7 +124,10 @@ lives minutes to hours, but say so in your runbook.
 | `securesend_messages_burned_total` | counter |
 | `securesend_messages_revoked_total` | counter |
 | `securesend_messages_expired_total` | counter |
-| `securesend_messages_evicted_total` | counter |
+| `securesend_messages_evicted_total` | counter | should stay at zero: the store refuses at the door rather than evicting |
+| `securesend_audit_dropped_total` | counter | audit lines dropped because the output could not keep up; anything above zero means the collector stalled |
+| `securesend_auth_logins_total` | counter | enterprise mode: completed sign-ins |
+| `securesend_auth_failures_total` | counter | enterprise mode: sign-ins refused |
 | `securesend_messages_access_denied_total` | counter |
 | `securesend_rate_limited_total{endpoint}` | counter |
 | `securesend_messages_active` | gauge |
