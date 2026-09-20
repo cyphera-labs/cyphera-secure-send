@@ -2,6 +2,7 @@ import "./styles.css";
 import { ApiError, api, loadSession, loadUiConfig, logout, type SessionView, type UiConfig } from "./api";
 import { decodeFragment, encodeFragment, openWith, prepare, seal, suggestPassword } from "./crypto";
 import { byteLength, clear, copyToClipboard, formatDuration, formatTime, h } from "./dom";
+import { S } from "./strings";
 
 const root = document.getElementById("app") as HTMLElement;
 let config: UiConfig;
@@ -70,7 +71,7 @@ function header(): HTMLElement {
     header.append(
       h("div", { class: "who" },
         h("span", { class: "who-email" }, session.email ?? ""),
-        h("button", { type: "button", class: "text-button", onclick: async () => { await logout(); location.assign("/"); } }, "Sign out"),
+        h("button", { type: "button", class: "text-button", onclick: async () => { await logout(); location.assign("/"); } }, S.common.signOut),
       ),
     );
   }
@@ -82,7 +83,7 @@ function signInCard(title: string, text: string, next: string): void {
     h("section", { class: "card" },
       h("h1", {}, title),
       h("p", {}, text),
-      h("div", { class: "actions" }, h("button", { type: "button", class: "filled-button", onclick: () => signIn(next) }, "Sign in")),
+      h("div", { class: "actions" }, h("button", { type: "button", class: "filled-button", onclick: () => signIn(next) }, S.common.signIn)),
     ),
   );
 }
@@ -90,8 +91,8 @@ function signInCard(title: string, text: string, next: string): void {
 function footer(): HTMLElement {
   const parts: (HTMLElement | string)[] = [];
   if (config.footer_text) parts.push(h("span", {}, config.footer_text));
-  if (config.support_url) parts.push(h("a", { href: config.support_url, rel: "noreferrer noopener" }, "Help"));
-  if (config.show_powered_by) parts.push(h("span", { class: "muted" }, "Powered by Cyphera SecureSend"));
+  if (config.support_url) parts.push(h("a", { href: config.support_url, rel: "noreferrer noopener" }, S.common.help));
+  if (config.show_powered_by) parts.push(h("span", { class: "muted" }, S.common.poweredBy));
   const f = h("footer", { class: "bottom" });
   parts.forEach((p, i) => {
     if (i > 0) f.append(h("span", { class: "dot" }, "·"));
@@ -105,7 +106,7 @@ function modeNotice(): HTMLElement | null {
   return h(
     "div",
     { class: "mode-banner", role: "note" },
-    "Access is controlled by the secure link and the password. Email addresses are recorded but not verified.",
+    S.standardNotice,
   );
 }
 
@@ -135,9 +136,9 @@ function busy(button: HTMLButtonElement, on: boolean, label?: string): void {
 
 function describeError(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
-    if (e.status === 429) return "Too many requests from your network. Wait a minute and try again.";
-    if (e.status === 413) return "The message is too large.";
-    if (e.status === 503) return "The service is at capacity. Try again shortly.";
+    if (e.status === 429) return S.errors.tooManyRequests;
+    if (e.status === 413) return S.errors.tooLarge;
+    if (e.status === 503) return S.errors.atCapacity;
     return e.message;
   }
   return fallback;
@@ -147,7 +148,7 @@ function describeError(e: unknown, fallback: string): string {
 
 function compose(): void {
   if (needsSignInToCreate()) {
-    signInCard(config.product_name, "Sign in to send a secure message.", "/");
+    signInCard(config.product_name, S.compose.signInToSend, "/");
     return;
   }
   const sender = h("input", { type: "email", name: "sender", autocomplete: "email", required: true, maxlength: "254", spellcheck: "false" });
@@ -161,43 +162,43 @@ function compose(): void {
   const password = h("input", { type: "password", name: "password", autocomplete: "new-password", required: true, minlength: "8", spellcheck: "false" });
   const showPw = h("button", { type: "button", class: "text-button", onclick: () => {
     password.type = password.type === "password" ? "text" : "password";
-    showPw.textContent = password.type === "password" ? "Show" : "Hide";
-  } }, "Show");
+    showPw.textContent = password.type === "password" ? S.compose.show : S.compose.hide;
+  } }, S.compose.show);
   const suggest = h("button", { type: "button", class: "text-button", onclick: () => {
     password.value = suggestPassword();
     password.type = "text";
-    showPw.textContent = "Hide";
-  } }, "Suggest");
+    showPw.textContent = S.compose.hide;
+  } }, S.compose.suggest);
   const ttl = h("select", { name: "ttl" });
   for (const secs of config.ttl_options_seconds) {
     const opt = h("option", { value: String(secs) }, formatDuration(secs));
     if (secs === config.default_ttl_seconds) opt.selected = true;
     ttl.append(opt);
   }
-  const counter = h("span", { class: "field-hint" }, `0 / ${config.max_plaintext_bytes.toLocaleString()} bytes`);
+  const counter = h("span", { class: "field-hint" }, S.compose.byteCount(0, config.max_plaintext_bytes));
   message.addEventListener("input", () => {
     const n = byteLength(message.value);
-    counter.textContent = `${n.toLocaleString()} / ${config.max_plaintext_bytes.toLocaleString()} bytes`;
+    counter.textContent = S.compose.byteCount(n, config.max_plaintext_bytes);
     counter.classList.toggle("over", n > config.max_plaintext_bytes);
   });
   const status = h("div", { class: "status" });
-  const submit = h("button", { type: "submit", class: "filled-button" }, "Create secure link");
+  const submit = h("button", { type: "submit", class: "filled-button" }, S.compose.create);
 
   const form = h(
     "form",
     { class: "card", novalidate: true, onsubmit: (e: Event) => { e.preventDefault(); void submitCompose(); } },
     h("h1", {}, config.product_name),
     h("p", { class: "lede" }, config.tagline),
-    field("Your email", sender),
-    field("Recipient email", recipient),
-    field("Message", message),
+    field(S.compose.yourEmail, sender),
+    field(S.compose.recipientEmail, recipient),
+    field(S.compose.message, message),
     counter,
     h("div", { class: "field" },
-      h("span", { class: "field-label" }, "Password"),
+      h("span", { class: "field-label" }, S.compose.password),
       h("div", { class: "row" }, password, suggest, showPw),
-      h("span", { class: "field-hint" }, "Share it with the recipient through a different channel than the link."),
+      h("span", { class: "field-hint" }, S.compose.passwordHint),
     ),
-    field("Expires after", ttl),
+    field(S.compose.expiresAfter, ttl),
     status,
     h("div", { class: "actions" }, submit),
   );
@@ -206,25 +207,25 @@ function compose(): void {
     clear(status);
     const bytes = byteLength(message.value);
     if (!sender.checkValidity() || !recipient.checkValidity()) {
-      status.append(notice("error", "Enter a valid sender and recipient email address."));
+      status.append(notice("error", S.compose.invalidAddresses));
       return;
     }
     if (message.value.length === 0) {
-      status.append(notice("error", "Enter a message."));
+      status.append(notice("error", S.compose.enterMessage));
       return;
     }
     if (bytes > config.max_plaintext_bytes) {
-      status.append(notice("error", `The message is limited to ${config.max_plaintext_bytes.toLocaleString()} bytes.`));
+      status.append(notice("error", S.compose.overLimit(config.max_plaintext_bytes)));
       return;
     }
     if (password.value.length < 8) {
-      status.append(notice("error", "Use a password of at least 8 characters, or pick Suggest."));
+      status.append(notice("error", S.compose.passwordTooShort));
       return;
     }
-    busy(submit, true, "Encrypting…");
+    busy(submit, true, S.compose.encrypting);
     try {
       const sealed = await seal(message.value, password.value, config.kdf);
-      busy(submit, true, "Creating link…");
+      busy(submit, true, S.compose.creatingLink);
       const created = await api.create({
         sender: sender.value.trim(),
         recipient: recipient.value.trim(),
@@ -239,8 +240,8 @@ function compose(): void {
       password.value = "";
       createdView({ link, revokeLink, recipient: recipient.value.trim(), expiresAt: created.expires_at, id: created.id, revokeToken: created.revoke_token });
     } catch (e) {
-      status.append(notice("error", describeError(e, "Could not create the message. Try again.")));
-      busy(submit, false, "Create secure link");
+      status.append(notice("error", describeError(e, S.compose.couldNotCreate)));
+      busy(submit, false, S.compose.create);
     }
   }
 
@@ -264,42 +265,42 @@ function copyRow(label: string, value: string, ariaLabel: string): HTMLElement {
   box.addEventListener("focus", () => box.select());
   const button = h("button", { type: "button", class: "tonal-button", onclick: async () => {
     const ok = await copyToClipboard(value);
-    button.textContent = ok ? "Copied" : "Select and copy";
+    button.textContent = ok ? S.common.copied : S.common.selectAndCopy;
     if (!ok) box.select();
-    setTimeout(() => (button.textContent = "Copy"), 2000);
-  } }, "Copy");
+    setTimeout(() => (button.textContent = S.common.copy), 2000);
+  } }, S.common.copy);
   return h("div", { class: "field" }, h("span", { class: "field-label" }, label), h("div", { class: "row" }, box, button));
 }
 
 function createdView(info: CreatedInfo): void {
   const status = h("div", { class: "status" });
   const revokeBtn = h("button", { type: "button", class: "outlined-button", onclick: async () => {
-    busy(revokeBtn, true, "Revoking…");
+    busy(revokeBtn, true, S.created.revoking);
     try {
       await api.revoke(info.id, info.revokeToken);
       clear(status);
-      status.append(notice("info", "The message has been revoked. The link no longer works."));
+      status.append(notice("info", S.created.revoked));
       revokeBtn.remove();
     } catch (e) {
       clear(status);
-      status.append(notice("error", describeError(e, "Could not revoke. Try again.")));
-      busy(revokeBtn, false, "Revoke message");
+      status.append(notice("error", describeError(e, S.created.couldNotRevoke)));
+      busy(revokeBtn, false, S.created.revoke);
     }
-  } }, "Revoke message");
+  } }, S.created.revoke);
 
   page(
     h("section", { class: "card" },
-      h("h1", {}, "Secure link created"),
+      h("h1", {}, S.created.title),
       h("dl", { class: "facts" },
-        h("dt", {}, "Recipient"), h("dd", {}, info.recipient),
-        h("dt", {}, "Expires"), h("dd", {}, formatTime(info.expiresAt)),
+        h("dt", {}, S.created.recipient), h("dd", {}, info.recipient),
+        h("dt", {}, S.created.expires), h("dd", {}, formatTime(info.expiresAt)),
       ),
-      copyRow("Share this link with the recipient", info.link, "Secure link"),
-      notice("warn", "Share the password through a different channel. Never send the link and the password together."),
-      copyRow("Keep this link if you want to revoke later", info.revokeLink, "Revoke link"),
-      notice("info", "This page cannot be reopened. Copy what you need before leaving it."),
+      copyRow(S.created.shareLink, info.link, S.created.shareLinkAria),
+      notice("warn", S.created.passwordWarning),
+      copyRow(S.created.keepRevokeLink, info.revokeLink, S.created.revokeLinkAria),
+      notice("info", S.created.cannotReopen),
       status,
-      h("div", { class: "actions" }, revokeBtn, h("a", { class: "text-button", href: "/" }, "Send another")),
+      h("div", { class: "actions" }, revokeBtn, h("a", { class: "text-button", href: "/" }, S.common.sendAnother)),
     ),
   );
 }
@@ -309,41 +310,39 @@ function createdView(info: CreatedInfo): void {
 function unavailable(): void {
   page(
     h("section", { class: "card" },
-      h("h1", {}, "Message unavailable"),
-      h("p", {}, "This message may have been viewed already, revoked by the sender, or expired. It is not stored anywhere and cannot be recovered."),
-      h("p", {}, "If you expected a message, ask the sender to create a new one."),
-      h("div", { class: "actions" }, h("a", { class: "text-button", href: "/" }, "Send a message")),
+      h("h1", {}, S.unavailable.title),
+      h("p", {}, S.unavailable.body),
+      h("p", {}, S.unavailable.askSender),
+      h("div", { class: "actions" }, h("a", { class: "text-button", href: "/" }, S.common.sendAMessage)),
     ),
   );
 }
 
 function reveal(id: string): void {
   if (needsSignInToRead()) {
-    const why = config.recipient_must_match
-      ? "Sign in to read it. It can be viewed only once, by the person it was sent to."
-      : "Sign in to read it. It can be viewed only once.";
-    signInCard("You have a secure message", why, `/m/${id}`);
+    const why = config.recipient_must_match ? S.reveal.signInToReadAsRecipient : S.reveal.signInToRead;
+    signInCard(S.reveal.title, why, `/m/${id}`);
     return;
   }
   const params = decodeFragment(location.hash);
   if (!params) {
     page(
       h("section", { class: "card" },
-        h("h1", {}, "Incomplete link"),
-        h("p", {}, "This link is missing the part after the # sign. Copy the whole link exactly as the sender shared it."),
+        h("h1", {}, S.reveal.incompleteTitle),
+        h("p", {}, S.reveal.incompleteBody),
       ),
     );
     return;
   }
   const password = h("input", { type: "password", name: "password", autocomplete: "off", required: true, spellcheck: "false" });
   const status = h("div", { class: "status" });
-  const submit = h("button", { type: "submit", class: "filled-button" }, "Reveal message");
+  const submit = h("button", { type: "submit", class: "filled-button" }, S.reveal.reveal);
   const form = h(
     "form",
     { class: "card", novalidate: true, onsubmit: (e: Event) => { e.preventDefault(); void submitReveal(); } },
-    h("h1", {}, "You have a secure message"),
-    notice("warn", "This message can be viewed only once. Make sure you are ready to read it now."),
-    field("Password", password, "The sender gave you this separately from the link."),
+    h("h1", {}, S.reveal.title),
+    notice("warn", S.reveal.onlyOnce),
+    field(S.reveal.password, password, S.reveal.passwordHint),
     status,
     h("div", { class: "actions" }, submit),
   );
@@ -351,7 +350,7 @@ function reveal(id: string): void {
   async function submitReveal(): Promise<void> {
     clear(status);
     if (!password.value) {
-      status.append(notice("error", "Enter the password."));
+      status.append(notice("error", S.reveal.passwordMissing));
       return;
     }
     // Held for the whole operation: the field is read once for the proof and
@@ -359,13 +358,13 @@ function reveal(id: string): void {
     // an edited field in between could never be decrypted.
     const secret = password.value;
     password.disabled = true;
-    busy(submit, true, "Checking…");
+    busy(submit, true, S.reveal.checking);
     try {
       // One derivation: the proof goes to the server, the key stays here
       // for the ciphertext that comes back.
       const keys = await prepare(secret, params!.linkSecret, params!.salt, params!.iterations);
       const consumed = await api.consume(id, keys.proof);
-      busy(submit, true, "Decrypting…");
+      busy(submit, true, S.reveal.decrypting);
       const plain = await openWith(consumed.envelope, keys.encKey);
       password.value = "";
       // The message is gone from the server; the link's secret has no
@@ -375,12 +374,12 @@ function reveal(id: string): void {
       revealedView(plain, consumed.sender, consumed.sender_authenticated);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        status.append(notice("error", "The password may be wrong, or the message is no longer available. Check the password and try again."));
+        status.append(notice("error", S.reveal.wrongOrGone));
       } else {
-        status.append(notice("error", describeError(e, "Could not decrypt the message.")));
+        status.append(notice("error", describeError(e, S.reveal.couldNotDecrypt)));
       }
       password.disabled = false;
-      busy(submit, false, "Reveal message");
+      busy(submit, false, S.reveal.reveal);
     }
   }
 
@@ -389,25 +388,25 @@ function reveal(id: string): void {
 }
 
 function revealedView(plain: string, sender: string, senderAuthenticated: boolean): void {
-  const text = h("textarea", { class: "plain", readonly: true, rows: "10", spellcheck: "false", "aria-label": "Message" });
+  const text = h("textarea", { class: "plain", readonly: true, rows: "10", spellcheck: "false", "aria-label": S.revealed.messageAria });
   text.value = plain;
   const copy = h("button", { type: "button", class: "tonal-button", onclick: async () => {
     const ok = await copyToClipboard(plain);
-    copy.textContent = ok ? "Copied" : "Select and copy";
+    copy.textContent = ok ? S.common.copied : S.common.selectAndCopy;
     if (!ok) text.select();
-    setTimeout(() => (copy.textContent = "Copy message"), 2000);
-  } }, "Copy message");
+    setTimeout(() => (copy.textContent = S.revealed.copyMessage), 2000);
+  } }, S.revealed.copyMessage);
   page(
     h("section", { class: "card" },
-      h("h1", {}, "Message"),
+      h("h1", {}, S.revealed.title),
       h("dl", { class: "facts" },
-        h("dt", {}, "From"),
+        h("dt", {}, S.revealed.from),
         // An address the sender typed is a claim, and it says so; an
         // address the identity provider vouched for does not need to.
-        h("dd", {}, sender, senderAuthenticated ? "" : h("span", { class: "muted" }, " (as entered by the sender, not verified)")),
+        h("dd", {}, sender, senderAuthenticated ? "" : h("span", { class: "muted" }, S.revealed.notVerified)),
       ),
       text,
-      notice("warn", "This message has been destroyed on the server. Do not refresh or leave this page until you have what you need."),
+      notice("warn", S.revealed.destroyed),
       h("div", { class: "actions" }, copy),
     ),
   );
@@ -423,22 +422,22 @@ function revokePage(id: string): void {
   const token = location.hash.startsWith("#") ? location.hash.slice(1) : "";
   const status = h("div", { class: "status" });
   const button = h("button", { type: "button", class: "filled-button", onclick: async () => {
-    busy(button, true, "Revoking…");
+    busy(button, true, S.revoke.revoking);
     try {
       await api.revoke(id, token);
       clear(status);
-      status.append(notice("info", "Done. If the message was still waiting, it has been destroyed."));
+      status.append(notice("info", S.revoke.done));
       button.remove();
     } catch (e) {
       clear(status);
-      status.append(notice("error", describeError(e, "Could not revoke. Try again.")));
-      busy(button, false, "Revoke message");
+      status.append(notice("error", describeError(e, S.revoke.couldNotRevoke)));
+      busy(button, false, S.revoke.revoke);
     }
-  } }, "Revoke message");
+  } }, S.revoke.revoke);
   page(
     h("section", { class: "card" },
-      h("h1", {}, "Revoke a message"),
-      h("p", {}, "Revoking destroys the message if it has not been viewed yet. This cannot be undone."),
+      h("h1", {}, S.revoke.title),
+      h("p", {}, S.revoke.body),
       status,
       h("div", { class: "actions" }, button),
     ),
@@ -461,7 +460,7 @@ async function boot(): Promise<void> {
   try {
     config = await loadUiConfig();
   } catch {
-    root.append(h("main", { class: "page" }, h("section", { class: "card" }, h("h1", {}, "SecureSend"), h("p", {}, "The service is not reachable right now."))));
+    root.append(h("main", { class: "page" }, h("section", { class: "card" }, h("h1", {}, S.errors.unreachableTitle), h("p", {}, S.errors.unreachable))));
     root.hidden = false;
     return;
   }
