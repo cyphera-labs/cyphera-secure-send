@@ -380,6 +380,69 @@ async fn create_validates_and_reports_request_problems_only() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+/// The limit has to bound what a caller costs, not only what they achieve.
+/// A caller over their limit is refused from the request head, before the
+/// service reads or buffers whatever they attached: an oversized body from
+/// a limited caller gets the limit's answer, never the body's.
+#[tokio::test]
+async fn a_limited_caller_is_refused_before_the_body_is_read() {
+    let h = harness(|s| {
+        s.messages.max_plaintext_bytes = 1024;
+        s.rate_limits.create_per_minute = 1;
+    })
+    .await;
+    let (_, verifier) = proof_and_verifier();
+    let (status, _, _) = send(
+        &h.app,
+        "POST",
+        "/v1/messages",
+        Some(create_body(&verifier, 48)),
+        "192.0.2.7",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Far over the body limit, and the answer is still the rate limit's.
+    let (status, _, _) = send(
+        &h.app,
+        "POST",
+        "/v1/messages",
+        Some(create_body(&verifier, 20_000)),
+        "192.0.2.7",
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// A caller can send the forwarded header as its own line ahead of the
+/// proxy's. That is a forged prefix like any other, and it changes nothing.
+#[tokio::test]
+async fn a_forged_forwarded_header_line_cannot_evade_the_rate_limit() {
+    let h = harness(|s| {
+        s.server.trusted_hops = 1;
+        s.rate_limits.consume_per_minute = 1;
+    })
+    .await;
+    let path = "/v1/messages/abcdefghijklmnopqrstuvwxyz/consume";
+
+    let mut statuses = Vec::new();
+    for forged in ["198.51.100.1", "198.51.100.2, 198.51.100.3"] {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json")
+            // The caller's own line, then the line the proxy appended.
+            .header("x-forwarded-for", forged)
+            .header("x-forwarded-for", "203.0.113.9")
+            .body(Body::from(r#"{"proof":"x"}"#))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer("10.0.0.2")));
+        statuses.push(h.app.clone().oneshot(req).await.unwrap().status());
+    }
+    assert_eq!(statuses[0], StatusCode::NOT_FOUND);
+    assert_eq!(statuses[1], StatusCode::TOO_MANY_REQUESTS);
+}
+
 #[tokio::test]
 async fn oversized_bodies_are_refused_before_parsing() {
     let h = harness(|s| s.messages.max_plaintext_bytes = 1024).await;

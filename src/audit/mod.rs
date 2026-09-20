@@ -74,6 +74,7 @@ pub enum Reason {
     Create,
     Consume,
     Revoke,
+    Login,
     ProviderError,
     IncompleteResponse,
     StateMismatch,

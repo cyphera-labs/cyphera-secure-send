@@ -45,6 +45,7 @@ config:
     create_per_minute: 10
     consume_per_minute: 30
     revoke_per_minute: 30
+    auth_per_minute: 20
     identity_create_per_minute: 30
     identity_consume_per_minute: 60
   audit:

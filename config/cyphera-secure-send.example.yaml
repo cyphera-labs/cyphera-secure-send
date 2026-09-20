@@ -19,6 +19,7 @@ server:
   trusted_proxies: []               # CIDRs whose X-Forwarded-For is honored
   hsts: false                       # enable when served over HTTPS
   shutdown_timeout_seconds: 10
+  request_timeout_seconds: 30       # a request must arrive in full within this
   tls:
     cert_path: null                 # set both to terminate TLS in-process
     key_path: null
@@ -40,6 +41,7 @@ rate_limits:
   create_per_minute: 10             # per client address
   consume_per_minute: 30
   revoke_per_minute: 30
+  auth_per_minute: 20               # sign-in starts and callbacks, enterprise mode
   identity_create_per_minute: 30    # per signed-in identity, enterprise mode
   identity_consume_per_minute: 60
 

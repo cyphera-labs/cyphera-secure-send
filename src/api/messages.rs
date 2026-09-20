@@ -1,10 +1,12 @@
 //! The three message endpoints.
 
 use axum::Json;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use time::format_description::well_known::Rfc3339;
 
@@ -53,7 +55,7 @@ pub struct RevokeBody {
     pub revoke_token: String,
 }
 
-async fn context(
+pub(super) async fn context(
     state: &SharedState,
     peer: SocketAddr,
     headers: &HeaderMap,
@@ -82,7 +84,7 @@ async fn context(
     (ip, ctx, principal)
 }
 
-fn rate_limited(
+pub(super) fn rate_limited(
     state: &SharedState,
     endpoint: Endpoint,
     ip: std::net::IpAddr,
@@ -101,6 +103,7 @@ fn rate_limited(
         Endpoint::Create => Reason::Create,
         Endpoint::Consume => Reason::Consume,
         Endpoint::Revoke => Reason::Revoke,
+        Endpoint::Auth => Reason::Login,
     };
     state
         .audit
@@ -108,15 +111,57 @@ fn rate_limited(
     Err(ApiError::RateLimited)
 }
 
+/// Which door a request is at. Each is a marker for the gate below.
+pub struct Create;
+pub struct Consume;
+pub struct Revoke;
+
+pub trait Door: Send + Sync + 'static {
+    const ENDPOINT: Endpoint;
+}
+impl Door for Create {
+    const ENDPOINT: Endpoint = Endpoint::Create;
+}
+impl Door for Consume {
+    const ENDPOINT: Endpoint = Endpoint::Consume;
+}
+impl Door for Revoke {
+    const ENDPOINT: Endpoint = Endpoint::Revoke;
+}
+
+/// Who is calling and whether they may, decided from the request head
+/// alone. Being an extractor of the head rather than a call inside the
+/// handler is what puts it before the body: a caller who is over their limit
+/// is refused before the service reads, buffers or parses anything they
+/// sent, so the limit bounds their cost as well as their count.
+pub struct Gate<D: Door> {
+    pub ctx: ClientContext,
+    pub principal: RequestPrincipal,
+    _door: PhantomData<D>,
+}
+
+impl<D: Door> FromRequestParts<SharedState> for Gate<D> {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &SharedState) -> Result<Self, ApiError> {
+        let ConnectInfo(peer) = ConnectInfo::<SocketAddr>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| ApiError::Internal)?;
+        let (ip, ctx, principal) = context(state, peer, &parts.headers).await;
+        rate_limited(state, D::ENDPOINT, ip, &ctx)?;
+        Ok(Self {
+            ctx,
+            principal,
+            _door: PhantomData,
+        })
+    }
+}
+
 pub async fn create(
     State(state): State<SharedState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
+    Gate { ctx, principal, .. }: Gate<Create>,
     ApiJson(body): ApiJson<CreateBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (ip, ctx, principal) = context(&state, peer, &headers).await;
-    rate_limited(&state, Endpoint::Create, ip, &ctx)?;
-
     let request = CreateRequest {
         sender: body.sender,
         recipient: body.recipient,
@@ -148,14 +193,10 @@ pub async fn create(
 
 pub async fn consume(
     State(state): State<SharedState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Gate { ctx, principal, .. }: Gate<Consume>,
     Path(id): Path<String>,
-    headers: HeaderMap,
     ApiJson(body): ApiJson<ConsumeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (ip, ctx, principal) = context(&state, peer, &headers).await;
-    rate_limited(&state, Endpoint::Consume, ip, &ctx)?;
-
     let consumed = state
         .service
         .consume(&id, &body.proof, &principal, &ctx)
@@ -172,13 +213,10 @@ pub async fn consume(
 
 pub async fn revoke(
     State(state): State<SharedState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Gate { ctx, .. }: Gate<Revoke>,
     Path(id): Path<String>,
-    headers: HeaderMap,
     ApiJson(body): ApiJson<RevokeBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (ip, ctx, _principal) = context(&state, peer, &headers).await;
-    rate_limited(&state, Endpoint::Revoke, ip, &ctx)?;
     state.service.revoke(&id, &body.revoke_token, &ctx).await;
     Ok(StatusCode::NO_CONTENT)
 }

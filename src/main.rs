@@ -103,8 +103,28 @@ fn serve(settings: Settings) -> Result<(), String> {
 
         let handle = axum_server::Handle::new();
         let app = public_router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+        let request_timeout = Duration::from_secs(state.settings.server.request_timeout_seconds);
 
-        let public_task = {
+        // A connection that opens and sends nothing, or trickles its headers,
+        // is holding a slot for no one. The protocol layer drops it at the
+        // same timeout the request body gets; and a multiplexed connection
+        // gets a modest number of streams, since each is a request's worth
+        // of buffering.
+        fn bound_connections(
+            builder: &mut hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
+            request_timeout: Duration,
+        ) {
+            builder
+                .http1()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(request_timeout);
+            builder
+                .http2()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .max_concurrent_streams(32);
+        }
+
+        let mut public_task = {
             let handle = handle.clone();
             match (tls.cert_path, tls.key_path) {
                 (Some(cert), Some(key)) => {
@@ -112,23 +132,20 @@ fn serve(settings: Settings) -> Result<(), String> {
                         axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key)
                             .await
                             .map_err(|e| format!("tls: {e}"))?;
-                    tokio::spawn(async move {
-                        axum_server::bind_rustls(public_addr, tls_config)
-                            .handle(handle)
-                            .serve(app)
-                            .await
-                    })
+                    let mut server = axum_server::bind_rustls(public_addr, tls_config);
+                    bound_connections(server.http_builder(), request_timeout);
+                    tokio::spawn(async move { server.handle(handle).serve(app).await })
                 }
-                _ => tokio::spawn(async move {
-                    axum_server::bind(public_addr)
-                        .handle(handle)
-                        .serve(app)
-                        .await
-                }),
+                _ => {
+                    let mut server = axum_server::bind(public_addr);
+                    bound_connections(server.http_builder(), request_timeout);
+                    tokio::spawn(async move { server.handle(handle).serve(app).await })
+                }
             }
         };
 
-        let mgmt_task = tokio::spawn(async move { axum::serve(mgmt_listener, mgmt_router).await });
+        let mut mgmt_task =
+            tokio::spawn(async move { axum::serve(mgmt_listener, mgmt_router).await });
 
         let maintenance = {
             let state = state.clone();
@@ -137,6 +154,11 @@ fn serve(settings: Settings) -> Result<(), String> {
                 loop {
                     tick.tick().await;
                     state.limiters.retain_recent();
+                    // Expiry is settled as a side effect of traffic; on a
+                    // quiet server nothing else would settle it, and an
+                    // expired message should be audited when it expires,
+                    // not when someone next asks for statistics.
+                    let _ = state.service.store().stats().await;
                 }
             })
         };
@@ -151,7 +173,17 @@ fn serve(settings: Settings) -> Result<(), String> {
             .emit(AuditEvent::success(AuditEventType::ServerStarted));
         tracing::info!(public = %bound, management = %management_addr, "listening");
 
-        shutdown_signal().await;
+        // A listener that dies is a process that should die with it, not one
+        // that keeps answering the readiness probe while serving nothing.
+        tokio::select! {
+            _ = shutdown_signal() => {}
+            exited = &mut public_task => {
+                return Err(format!("public listener stopped unexpectedly: {exited:?}"));
+            }
+            exited = &mut mgmt_task => {
+                return Err(format!("management listener stopped unexpectedly: {exited:?}"));
+            }
+        }
         ready.store(false, Ordering::SeqCst);
         let stats = state.service.store().stats().await;
         let mut event = AuditEvent::success(AuditEventType::ServerStopping);

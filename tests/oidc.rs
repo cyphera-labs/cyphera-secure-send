@@ -973,6 +973,40 @@ async fn an_unrelated_token_failure_does_not_spend_the_key_refresh() {
     assert_eq!(v["authenticated"], true);
 }
 
+/// Every start of a sign-in and every callback is anonymous, and every
+/// accepted callback costs a request to the provider under this
+/// deployment's credentials. So the door has a limit like the others.
+#[tokio::test]
+async fn the_sign_in_door_is_rate_limited() {
+    let idp = start_idp().await;
+    let app = start_app(&idp, |s| s.rate_limits.auth_per_minute = 2).await;
+    let c = client();
+
+    let mut statuses = Vec::new();
+    for _ in 0..3 {
+        let r = c
+            .get(format!("{}/auth/login?next=/", app.base))
+            .send()
+            .await
+            .unwrap();
+        statuses.push(r.status());
+    }
+    assert_eq!(statuses[0], StatusCode::SEE_OTHER);
+    assert_eq!(statuses[1], StatusCode::SEE_OTHER);
+    assert_eq!(statuses[2], StatusCode::TOO_MANY_REQUESTS);
+
+    // The callback shares the bucket: a forged callback is refused at the
+    // door, and the provider's token endpoint is never called for it.
+    let calls_before = *idp.token_calls.lock().unwrap();
+    let r = c
+        .get(format!("{}/auth/callback?code=x&state=y", app.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(*idp.token_calls.lock().unwrap(), calls_before);
+}
+
 #[tokio::test]
 async fn ui_config_reports_the_mode_and_cookies_are_http_only_lax() {
     let idp = start_idp().await;

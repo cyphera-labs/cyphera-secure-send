@@ -13,8 +13,11 @@ pub mod static_files;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use std::sync::Arc;
+use std::time::Duration;
+use tower_http::timeout::TimeoutLayer;
 
 use crate::application::MessageService;
 use crate::audit::AuditSink;
@@ -36,6 +39,7 @@ pub type SharedState = Arc<AppState>;
 pub fn public_router(state: SharedState) -> Router {
     let body_limit = state.service.limits().envelope.max_request_body_bytes();
     let hsts = state.settings.server.hsts;
+    let request_timeout = Duration::from_secs(state.settings.server.request_timeout_seconds);
 
     let api = Router::new()
         .route("/v1/messages", post(messages::create))
@@ -44,7 +48,12 @@ pub fn public_router(state: SharedState) -> Router {
         .route("/v1/ui-config", get(branding::ui_config))
         .route("/v1/session", get(auth::session))
         .route("/v1/health", get(management::health))
-        .layer(DefaultBodyLimit::max(body_limit));
+        .layer(DefaultBodyLimit::max(body_limit))
+        // A body that trickles in, or stops, is dropped rather than held.
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ));
 
     Router::new()
         .merge(api)

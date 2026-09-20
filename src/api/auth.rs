@@ -57,10 +57,18 @@ pub struct LoginQuery {
     pub next: Option<String>,
 }
 
-pub async fn login(State(state): State<SharedState>, Query(q): Query<LoginQuery>) -> Response {
+pub async fn login(
+    State(state): State<SharedState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<LoginQuery>,
+) -> Response {
     let Some(oidc) = &state.oidc else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if let Err(refused) = at_the_door(&state, peer, &headers).await {
+        return refused.into_response();
+    }
     let next = safe_next(q.next.as_deref());
     match oidc.begin_login(next).await {
         Ok((url, login_state)) => {
@@ -88,6 +96,9 @@ pub async fn callback(
     let Some(oidc) = &state.oidc else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if let Err(refused) = at_the_door(&state, peer, &headers).await {
+        return refused.into_response();
+    }
     let ctx = client_context(&state, peer, &headers);
     let jar = CookieJar::from_headers(&headers);
     let remove_login = jar
@@ -198,6 +209,18 @@ pub async fn logout(
 /// stripped of control characters.
 fn sanitize(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).take(200).collect()
+}
+
+/// The sign-in door has a per-address limit like the others. It is the one
+/// anonymous door whose every accepted knock costs a request to the identity
+/// provider under this deployment's credentials.
+async fn at_the_door(
+    state: &SharedState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), super::error::ApiError> {
+    let (ip, ctx, _) = super::messages::context(state, peer, headers).await;
+    super::messages::rate_limited(state, super::ratelimit::Endpoint::Auth, ip, &ctx)
 }
 
 fn client_context(state: &SharedState, peer: SocketAddr, headers: &HeaderMap) -> ClientContext {

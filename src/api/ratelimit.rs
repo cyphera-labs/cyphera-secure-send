@@ -16,6 +16,10 @@ pub struct Limiters {
     pub create: Limiter,
     pub consume: Limiter,
     pub revoke: Limiter,
+    /// The sign-in door. Anonymous by nature, and each callback it accepts
+    /// costs a request to the identity provider under this deployment's own
+    /// credentials, so it is bounded per address like everything else.
+    pub auth: Limiter,
     pub identity_create: IdentityLimiter,
     pub identity_consume: IdentityLimiter,
 }
@@ -25,6 +29,7 @@ pub enum Endpoint {
     Create,
     Consume,
     Revoke,
+    Auth,
 }
 
 impl Endpoint {
@@ -33,6 +38,7 @@ impl Endpoint {
             Endpoint::Create => "create",
             Endpoint::Consume => "consume",
             Endpoint::Revoke => "revoke",
+            Endpoint::Auth => "auth",
         }
     }
 }
@@ -53,6 +59,7 @@ impl Limiters {
             create: per_minute(settings.create_per_minute),
             consume: per_minute(settings.consume_per_minute),
             revoke: per_minute(settings.revoke_per_minute),
+            auth: per_minute(settings.auth_per_minute),
             identity_create: per_minute_by_identity(settings.identity_create_per_minute),
             identity_consume: per_minute_by_identity(settings.identity_consume_per_minute),
         }
@@ -64,7 +71,7 @@ impl Limiters {
         let limiter = match endpoint {
             Endpoint::Create => &self.identity_create,
             Endpoint::Consume => &self.identity_consume,
-            Endpoint::Revoke => return true,
+            Endpoint::Revoke | Endpoint::Auth => return true,
         };
         limiter.check_key(&subject.to_owned()).is_ok()
     }
@@ -74,6 +81,7 @@ impl Limiters {
             Endpoint::Create => &self.create,
             Endpoint::Consume => &self.consume,
             Endpoint::Revoke => &self.revoke,
+            Endpoint::Auth => &self.auth,
         };
         limiter.check_key(&ip).is_ok()
     }
@@ -83,6 +91,7 @@ impl Limiters {
         self.create.retain_recent();
         self.consume.retain_recent();
         self.revoke.retain_recent();
+        self.auth.retain_recent();
         self.identity_create.retain_recent();
         self.identity_consume.retain_recent();
     }
@@ -100,6 +109,7 @@ mod tests {
             create_per_minute: 2,
             consume_per_minute: 2,
             revoke_per_minute: 2,
+            auth_per_minute: 2,
             identity_create_per_minute: 1,
             identity_consume_per_minute: 1,
         });

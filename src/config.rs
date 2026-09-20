@@ -65,6 +65,10 @@ pub struct ServerSettings {
     pub hsts: bool,
     /// Seconds to let in-flight requests finish on shutdown.
     pub shutdown_timeout_seconds: u64,
+    /// How long a request may take to arrive in full, headers and body. A
+    /// connection that opens and then trickles, or stops, holds memory for
+    /// no one; this is when it is dropped.
+    pub request_timeout_seconds: u64,
     pub tls: TlsSettings,
 }
 
@@ -114,6 +118,9 @@ pub struct RateLimitSettings {
     pub create_per_minute: u32,
     pub consume_per_minute: u32,
     pub revoke_per_minute: u32,
+    /// Sign-in starts and callbacks, per client address. Each accepted
+    /// callback costs a request to the identity provider.
+    pub auth_per_minute: u32,
     /// Per signed-in identity, enterprise mode only. Bounds a signed-in
     /// caller regardless of how many addresses they come from.
     pub identity_create_per_minute: u32,
@@ -335,6 +342,7 @@ impl Default for ServerSettings {
             trusted_hops: 0,
             hsts: false,
             shutdown_timeout_seconds: 10,
+            request_timeout_seconds: 30,
             tls: TlsSettings::default(),
         }
     }
@@ -371,6 +379,7 @@ impl Default for RateLimitSettings {
             create_per_minute: 10,
             consume_per_minute: 30,
             revoke_per_minute: 30,
+            auth_per_minute: 20,
             identity_create_per_minute: 30,
             identity_consume_per_minute: 60,
         }
@@ -649,6 +658,11 @@ impl Settings {
                     "enterprise.creation.require_oidc is off, which allows anonymous creation; serve over https before opening that".into(),
                 ));
             }
+        }
+        if self.server.request_timeout_seconds == 0 {
+            return Err(ConfigError::Invalid(
+                "server.request_timeout_seconds must be at least 1".into(),
+            ));
         }
         if self.server.trusted_hops > 0 && !self.server.trusted_proxies.is_empty() {
             return Err(ConfigError::Invalid(

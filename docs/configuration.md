@@ -45,6 +45,7 @@ response, not features.
 | `trusted_hops` | `0` | how many proxies stand in front, when their addresses are not knowable. A proxy appends the address it received from, so one in front means the client is the **last** entry of `X-Forwarded-For`, two means second from the right. Reading from the right is what makes it safe. Mutually exclusive with `trusted_proxies`, and unsafe anywhere the service can be reached directly. Verify it by turning on `audit.include_client_ip` and checking a request from a known address |
 | `hsts` | `false` | emit `Strict-Transport-Security`; enable once HTTPS is in place |
 | `shutdown_timeout_seconds` | `10` | drain time on SIGTERM |
+| `request_timeout_seconds` | `30` | how long a request may take to arrive in full, headers and body. A connection that opens and trickles, or stops, is dropped at this point rather than held |
 | `tls.cert_path`, `tls.key_path` | unset | set both to terminate TLS in-process (PEM) |
 
 ## messages
@@ -63,9 +64,15 @@ response, not features.
 ## rate_limits
 
 Token buckets, per minute. Per client address: `create_per_minute` (10),
-`consume_per_minute` (30), `revoke_per_minute` (30). Behind a proxy, set
-either `server.trusted_proxies` or `server.trusted_hops`, or every client
-shares one bucket.
+`consume_per_minute` (30), `revoke_per_minute` (30), and in enterprise mode
+`auth_per_minute` (20) for sign-in starts and callbacks together, since each
+accepted callback costs a request to the identity provider. Behind a proxy,
+set either `server.trusted_proxies` or `server.trusted_hops`, or every
+client shares one bucket.
+
+A caller over a limit is refused from the request head, before the body is
+read, so the limit bounds what they cost the service as well as what they
+achieve.
 
 In enterprise mode a second bucket applies per signed-in identity, so a
 caller is bounded however many addresses they come from:

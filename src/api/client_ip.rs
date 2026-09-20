@@ -22,11 +22,27 @@ pub fn resolve(peer: SocketAddr, headers: &HeaderMap, trusted: &[IpNet], hops: u
 /// Counting from the right is what makes this safe: a client can prepend
 /// anything it likes, but every forged entry shifts the whole chain left
 /// without moving the position we read, so the answer never changes.
+/// Every address in `X-Forwarded-For`, left to right. The header may arrive
+/// as several lines, not only as one comma-separated value: a proxy that
+/// appends a line rather than extending the last one is common, and a caller
+/// can send lines of their own ahead of it. All of them are one chain, in
+/// order; reading only the first line would hand the caller the answer.
+fn forwarded_chain(headers: &HeaderMap) -> Option<Vec<String>> {
+    let mut chain = Vec::new();
+    let mut seen = false;
+    for line in headers.get_all("x-forwarded-for") {
+        seen = true;
+        if let Ok(line) = line.to_str() {
+            chain.extend(line.split(',').map(|s| s.trim().to_owned()));
+        }
+    }
+    seen.then_some(chain)
+}
+
 fn resolve_by_hops(peer: SocketAddr, headers: &HeaderMap, hops: u8) -> IpAddr {
-    let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) else {
+    let Some(chain) = forwarded_chain(headers) else {
         return peer.ip();
     };
-    let chain: Vec<&str> = value.split(',').map(str::trim).collect();
     // Too short to hold what the configured number of proxies would have
     // added, so it did not come the way the deployment says it does.
     let Some(index) = chain.len().checked_sub(usize::from(hops)) else {
@@ -43,12 +59,12 @@ fn resolve_by_networks(peer: SocketAddr, headers: &HeaderMap, trusted: &[IpNet])
     if trusted.is_empty() || !trusted.iter().any(|net| net.contains(&peer_ip)) {
         return peer_ip;
     }
-    let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) else {
+    let Some(chain) = forwarded_chain(headers) else {
         return peer_ip;
     };
     // Walk from the right: skip every trusted hop, take the first untrusted.
-    for candidate in value.split(',').rev() {
-        let Ok(ip) = candidate.trim().parse::<IpAddr>() else {
+    for candidate in chain.iter().rev() {
+        let Ok(ip) = candidate.parse::<IpAddr>() else {
             return peer_ip;
         };
         if !trusted.iter().any(|net| net.contains(&ip)) {
@@ -112,6 +128,26 @@ mod tests {
         // way it claims, so the socket peer is the only honest answer.
         assert_eq!(resolve(peer, &hdr("203.0.113.9"), &[], 2), peer.ip());
         assert_eq!(resolve(peer, &HeaderMap::new(), &[], 1), peer.ip());
+    }
+
+    /// The same chain split across header lines is the same chain. A caller
+    /// who sends their own line ahead of the proxy's is a forged prefix like
+    /// any other, in both ways of trusting the header.
+    #[test]
+    fn a_forged_header_line_is_just_a_prefix() {
+        let peer: SocketAddr = "169.254.1.1:1234".parse().unwrap();
+        let client = "203.0.113.9".parse::<IpAddr>().unwrap();
+        let mut h = HeaderMap::new();
+        h.append(
+            "x-forwarded-for",
+            "198.51.100.1, 198.51.100.2".parse().unwrap(),
+        );
+        h.append("x-forwarded-for", "203.0.113.9".parse().unwrap());
+
+        assert_eq!(resolve(peer, &h, &[], 1), client);
+
+        let trusted = vec!["169.254.0.0/16".parse::<IpNet>().unwrap()];
+        assert_eq!(resolve(peer, &h, &trusted, 0), client);
     }
 
     #[test]
