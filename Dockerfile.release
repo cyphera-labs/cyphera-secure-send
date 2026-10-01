@@ -4,7 +4,7 @@
 # Dockerfile instead; this one expects ./dist to hold
 # cyphera-secure-send-linux-amd64 and -arm64.
 
-FROM cgr.dev/chainguard/glibc-dynamic@sha256:94ec8c23c45c7aad22b6ab400dc7e1b46dd36f4c71d6c7a3976c8ad4e36ca266
+FROM cgr.dev/chainguard/glibc-dynamic@sha256:05353305142a1ae7c1e27d2cdd09df1650874db3e4c004b3cb2f6dd794e7320f
 ARG TARGETARCH
 COPY --chmod=0755 dist/cyphera-secure-send-linux-${TARGETARCH} /usr/local/bin/cyphera-secure-send
 USER nonroot

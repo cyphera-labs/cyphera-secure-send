@@ -1,7 +1,7 @@
 # Build the interface, build the service, ship only the binary.
 # Runtime image has no shell and no package manager; the process runs as nonroot.
 
-FROM cgr.dev/chainguard/wolfi-base@sha256:1d95114038f76513a9ace6fca107d5582b08c65981f81f61cb56bf7fd2ef216d AS web
+FROM cgr.dev/chainguard/wolfi-base@sha256:d59fd2d1d21e913b12a8d56064e9aaf61f818289bd18b17132a0c4fde2358cea AS web
 RUN apk add --no-cache nodejs npm && rm -rf /var/cache/apk/*
 USER nonroot
 WORKDIR /home/nonroot/web
@@ -10,7 +10,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY --chown=nonroot:nonroot web/ ./
 RUN npm run build
 
-FROM cgr.dev/chainguard/wolfi-base@sha256:1d95114038f76513a9ace6fca107d5582b08c65981f81f61cb56bf7fd2ef216d AS build
+FROM cgr.dev/chainguard/wolfi-base@sha256:d59fd2d1d21e913b12a8d56064e9aaf61f818289bd18b17132a0c4fde2358cea AS build
 RUN apk add --no-cache rust-1.97 build-base && rm -rf /var/cache/apk/*
 USER nonroot
 WORKDIR /home/nonroot/src
@@ -20,7 +20,7 @@ COPY --chown=nonroot:nonroot tests/ tests/
 COPY --from=web --chown=nonroot:nonroot /home/nonroot/web/dist web/dist
 RUN cargo build --release --locked && strip target/release/cyphera-secure-send
 
-FROM cgr.dev/chainguard/glibc-dynamic@sha256:94ec8c23c45c7aad22b6ab400dc7e1b46dd36f4c71d6c7a3976c8ad4e36ca266
+FROM cgr.dev/chainguard/glibc-dynamic@sha256:05353305142a1ae7c1e27d2cdd09df1650874db3e4c004b3cb2f6dd794e7320f
 COPY --from=build /home/nonroot/src/target/release/cyphera-secure-send /usr/local/bin/cyphera-secure-send
 USER nonroot
 EXPOSE 8080 9090
