@@ -212,7 +212,12 @@ jobs:
           done
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          files: dist/*
+          # Named rather than everything in dist, which also holds whatever
+          # artifacts the earlier jobs happened to upload for their own use.
+          files: |
+            dist/cyphera-secure-send-linux-*
+            dist/cyphera-secure-send-*-sbom.*
+            dist/cyphera-secure-send-*-provenance.intoto.jsonl
           generate_release_notes: false
           # A tag carrying a hyphen is a candidate, not a release.
           prerelease: ${{ contains(github.ref_name, '-') }}
