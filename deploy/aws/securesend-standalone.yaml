@@ -1,0 +1,336 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Cyphera SecureSend, standalone shape on ECS Fargate behind an Application Load
+  Balancer, standard mode by default. Serves HTTPS on a name you own, because
+  the browser does the encryption and the Web Crypto API requires a secure
+  context. Exactly one task; messages live in its memory. Deployments replace
+  the task (minimum healthy 0, maximum 100) so two instances never overlap.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Network }
+        Parameters: [VpcId, PublicSubnetIds, AccessLogsBucket]
+      - Label: { default: Service }
+        Parameters: [Image, PublicHostname, CertificateArn, CompanyName, PrimaryColor, DefaultTtlSeconds, MemoryBudgetBytes]
+      - Label: { default: Identity (enterprise mode) }
+        Parameters: [Mode, OidcIssuer, OidcClientId, OidcClientSecret, AllowedDomains]
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the load balancer and the task.
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Two or more public subnets for the load balancer (the task shares them with a public IP for image pulls).
+  Image:
+    Type: String
+    Default: ghcr.io/cyphera-labs/cyphera-secure-send:latest
+    Description: Container image. Pin a version tag in production.
+  AccessLogsBucket:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional S3 bucket for load balancer access logs. Empty leaves them off.
+      Request paths carry the public message identifier and never a secret, so
+      logs are safe to keep; the bucket and its policy are yours to create.
+  PublicHostname:
+    Type: String
+    Description: >-
+      The name users will reach the service at, for example send.example.com.
+      Point it at the load balancer after the stack is created. The browser
+      performs the encryption, and the Web Crypto API is only available in a
+      secure context, so this must be a name your certificate covers.
+    AllowedPattern: "^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$"
+  CertificateArn:
+    Type: String
+    Description: ACM certificate ARN covering PublicHostname.
+    AllowedPattern: "^arn:aws[a-z-]*:acm:.+$"
+  CompanyName:
+    Type: String
+    Default: ""
+  PrimaryColor:
+    Type: String
+    Default: "#1f4e79"
+    AllowedPattern: "^#[0-9A-Fa-f]{6}$|^#[0-9A-Fa-f]{3}$"
+  DefaultTtlSeconds:
+    Type: Number
+    Default: 3600
+    AllowedValues: [300, 900, 3600, 28800, 86400]
+  MemoryBudgetBytes:
+    Type: Number
+    Default: 134217728
+  Mode:
+    Type: String
+    Default: standard
+    AllowedValues: [standard, enterprise]
+    Description: standard records who users say they are; enterprise verifies them through your identity provider.
+  OidcIssuer:
+    Type: String
+    Default: ""
+    Description: "For Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0"
+  OidcClientId:
+    Type: String
+    Default: ""
+  OidcClientSecret:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Stored in Secrets Manager and injected into the task.
+  AllowedDomains:
+    Type: String
+    Default: ""
+    Description: Comma-separated allowed email domains. Empty allows any.
+
+Rules:
+  OidcNeedsItsInputs:
+    RuleCondition: !Equals [!Ref Mode, enterprise]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref OidcClientSecret, ""]]
+        AssertDescription: mode enterprise requires OidcClientSecret
+      - Assert: !Not [!Equals [!Ref OidcIssuer, ""]]
+        AssertDescription: mode enterprise requires OidcIssuer
+      - Assert: !Not [!Equals [!Ref OidcClientId, ""]]
+        AssertDescription: mode enterprise requires OidcClientId
+
+Conditions:
+  UseAccessLogs: !Not [!Equals [!Ref AccessLogsBucket, ""]]
+  UseOidc: !Equals [!Ref Mode, enterprise]
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${AWS::StackName}-cluster"
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/securesend/${AWS::StackName}"
+      RetentionInDays: 30
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SecureSend load balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SecureSend task, reachable only from the load balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+      LoadBalancerAttributes:
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: "true"
+        - Key: access_logs.s3.enabled
+          Value: !If [UseAccessLogs, "true", "false"]
+        - !If
+          - UseAccessLogs
+          - Key: access_logs.s3.bucket
+            Value: !Ref AccessLogsBucket
+          - !Ref AWS::NoValue
+        - !If
+          - UseAccessLogs
+          - Key: access_logs.s3.prefix
+            Value: !Ref AWS::StackName
+          - !Ref AWS::NoValue
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 8080
+      TargetType: ip
+      HealthCheckPath: /v1/health
+      HealthCheckIntervalSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "15"
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  OidcSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: UseOidc
+    Metadata:
+      # The linter cannot see that the OidcNeedsSecretAndHttps rule refuses an
+      # empty secret whenever this resource exists.
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]
+    Properties:
+      Description: SecureSend OIDC client secret
+      SecretString: !Ref OidcClientSecret
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - !If
+          - UseOidc
+          - PolicyName: read-oidc-secret
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref OidcSecret
+          - !Ref AWS::NoValue
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${AWS::StackName}-securesend"
+      Cpu: "512"
+      Memory: "1024"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ContainerDefinitions:
+        - Name: securesend
+          Image: !Ref Image
+          Essential: true
+          ReadonlyRootFilesystem: true
+          User: "65532"
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: CYPHERA_SECURESEND__SERVER__PUBLIC_BASE_URL
+              Value: !Sub "https://${PublicHostname}"
+            - Name: CYPHERA_SECURESEND__SERVER__HSTS
+              Value: "true"
+            - Name: CYPHERA_SECURESEND__SERVER__MANAGEMENT_BIND
+              Value: 127.0.0.1:9090
+            # The load balancer's addresses are inside the VPC; trust the VPC.
+            - Name: CYPHERA_SECURESEND__SERVER__TRUSTED_PROXIES
+              Value: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+            - Name: CYPHERA_SECURESEND__MESSAGES__DEFAULT_TTL_SECONDS
+              Value: !Ref DefaultTtlSeconds
+            - Name: CYPHERA_SECURESEND__MESSAGES__MEMORY_BUDGET_BYTES
+              Value: !Ref MemoryBudgetBytes
+            - Name: CYPHERA_SECURESEND__BRANDING__COMPANY_NAME
+              Value: !Ref CompanyName
+            - Name: CYPHERA_SECURESEND__BRANDING__COLORS__PRIMARY
+              Value: !Ref PrimaryColor
+            - Name: CYPHERA_SECURESEND__MODE
+              Value: !Ref Mode
+            - Name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__ISSUER
+              Value: !Ref OidcIssuer
+            - Name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_ID
+              Value: !Ref OidcClientId
+            - Name: CYPHERA_SECURESEND__ENTERPRISE__CREATION__ALLOWED_DOMAINS
+              Value: !Ref AllowedDomains
+          Secrets: !If
+            - UseOidc
+            - - Name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET
+                ValueFrom: !Ref OidcSecret
+            - !Ref AWS::NoValue
+          HealthCheck:
+            Command: ["CMD", "/usr/local/bin/cyphera-secure-send", "check-config"]
+            Interval: 60
+            Timeout: 5
+            Retries: 3
+          StopTimeout: 20
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: securesend
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [HttpListener]
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      # Replace, never overlap: a second memory-backed task would hold its
+      # own, separate messages.
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref PublicSubnetIds
+          SecurityGroups: [!Ref TaskSecurityGroup]
+      LoadBalancers:
+        - ContainerName: securesend
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+      HealthCheckGracePeriodSeconds: 30
+
+Outputs:
+  Url:
+    Description: Where the service answers once PublicHostname points at the load balancer.
+    Value: !Sub "https://${PublicHostname}"
+  PointThisNameAtTheLoadBalancer:
+    Description: Create a DNS record for PublicHostname aliasing this name.
+    Value: !GetAtt LoadBalancer.DNSName
+  OidcRedirectUri:
+    Description: Register this redirect URI at your identity provider.
+    Value: !Sub "https://${PublicHostname}/auth/callback"

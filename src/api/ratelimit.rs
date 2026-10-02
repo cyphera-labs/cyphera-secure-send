@@ -1,0 +1,128 @@
+//! Per-client token buckets. Keys age out so the tables stay bounded.
+
+use governor::clock::DefaultClock;
+use governor::state::keyed::DefaultKeyedStateStore;
+use governor::{Quota, RateLimiter};
+use std::net::IpAddr;
+use std::num::NonZeroU32;
+use std::time::Duration;
+
+use crate::config::RateLimitSettings;
+
+type Limiter = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
+type IdentityLimiter = RateLimiter<String, DefaultKeyedStateStore<String>, DefaultClock>;
+
+pub struct Limiters {
+    pub create: Limiter,
+    pub consume: Limiter,
+    pub revoke: Limiter,
+    /// The sign-in door. Anonymous by nature, and each callback it accepts
+    /// costs a request to the identity provider under this deployment's own
+    /// credentials, so it is bounded per address like everything else.
+    pub auth: Limiter,
+    pub identity_create: IdentityLimiter,
+    pub identity_consume: IdentityLimiter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Endpoint {
+    Create,
+    Consume,
+    Revoke,
+    Auth,
+}
+
+impl Endpoint {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Endpoint::Create => "create",
+            Endpoint::Consume => "consume",
+            Endpoint::Revoke => "revoke",
+            Endpoint::Auth => "auth",
+        }
+    }
+}
+
+fn per_minute(n: u32) -> Limiter {
+    let n = NonZeroU32::new(n.max(1)).expect("nonzero");
+    RateLimiter::keyed(Quota::per_minute(n))
+}
+
+fn per_minute_by_identity(n: u32) -> IdentityLimiter {
+    let n = NonZeroU32::new(n.max(1)).expect("nonzero");
+    RateLimiter::keyed(Quota::per_minute(n))
+}
+
+impl Limiters {
+    pub fn new(settings: &RateLimitSettings) -> Self {
+        Self {
+            create: per_minute(settings.create_per_minute),
+            consume: per_minute(settings.consume_per_minute),
+            revoke: per_minute(settings.revoke_per_minute),
+            auth: per_minute(settings.auth_per_minute),
+            identity_create: per_minute_by_identity(settings.identity_create_per_minute),
+            identity_consume: per_minute_by_identity(settings.identity_consume_per_minute),
+        }
+    }
+
+    /// The per-identity bucket for a signed-in caller. Revoke has no identity
+    /// dimension: it is bounded per address and by the token itself.
+    pub fn check_identity(&self, endpoint: Endpoint, subject: &str) -> bool {
+        let limiter = match endpoint {
+            Endpoint::Create => &self.identity_create,
+            Endpoint::Consume => &self.identity_consume,
+            Endpoint::Revoke | Endpoint::Auth => return true,
+        };
+        limiter.check_key(&subject.to_owned()).is_ok()
+    }
+
+    pub fn check(&self, endpoint: Endpoint, ip: IpAddr) -> bool {
+        let limiter = match endpoint {
+            Endpoint::Create => &self.create,
+            Endpoint::Consume => &self.consume,
+            Endpoint::Revoke => &self.revoke,
+            Endpoint::Auth => &self.auth,
+        };
+        limiter.check_key(&ip).is_ok()
+    }
+
+    /// Drops buckets that have been idle long enough to be full again.
+    pub fn retain_recent(&self) {
+        self.create.retain_recent();
+        self.consume.retain_recent();
+        self.revoke.retain_recent();
+        self.auth.retain_recent();
+        self.identity_create.retain_recent();
+        self.identity_consume.retain_recent();
+    }
+
+    pub const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(120);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buckets_are_per_key() {
+        let l = Limiters::new(&RateLimitSettings {
+            create_per_minute: 2,
+            consume_per_minute: 2,
+            revoke_per_minute: 2,
+            auth_per_minute: 2,
+            identity_create_per_minute: 1,
+            identity_consume_per_minute: 1,
+        });
+        let a: IpAddr = "192.0.2.1".parse().unwrap();
+        let b: IpAddr = "192.0.2.2".parse().unwrap();
+        assert!(l.check(Endpoint::Create, a));
+        assert!(l.check(Endpoint::Create, a));
+        assert!(!l.check(Endpoint::Create, a));
+        assert!(l.check(Endpoint::Create, b));
+        assert!(l.check(Endpoint::Consume, a));
+        assert!(l.check_identity(Endpoint::Create, "sub-1"));
+        assert!(!l.check_identity(Endpoint::Create, "sub-1"));
+        assert!(l.check_identity(Endpoint::Create, "sub-2"));
+        assert!(l.check_identity(Endpoint::Revoke, "sub-1"));
+    }
+}

@@ -1,0 +1,23 @@
+{{- if .Values.management.serviceMonitor.enabled }}
+{{- if not .Values.management.service.enabled }}
+{{- fail "securesend: management.serviceMonitor.enabled requires management.service.enabled" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "securesend.fullname" . }}
+  labels:
+    {{- include "securesend.labels" . | nindent 4 }}
+    {{- with .Values.management.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "securesend.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: management
+  endpoints:
+    - port: management
+      path: /metrics
+      interval: {{ .Values.management.serviceMonitor.interval }}
+{{- end }}

@@ -1,0 +1,23 @@
+services:
+  secure-send:
+    image: ghcr.io/cyphera-labs/cyphera-secure-send:latest
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      CYPHERA_SECURESEND__BRANDING__COMPANY_NAME: "Acme"
+      CYPHERA_SECURESEND__BRANDING__COLORS__PRIMARY: "#0057b8"
+    volumes:
+      - ./config:/config:ro
+    command: ["serve", "--config", "/config/cyphera-secure-send.yaml"]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/cyphera-secure-send", "check-config", "--config", "/config/cyphera-secure-send.yaml"]
+      interval: 60s
+      timeout: 5s
+      retries: 3

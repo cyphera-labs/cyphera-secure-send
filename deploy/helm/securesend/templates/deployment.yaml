@@ -1,0 +1,132 @@
+{{- if and (eq .Values.storage.backend "memory") (gt (int .Values.replicaCount) 1) -}}
+{{- fail "securesend: the memory backend holds messages in one process; replicaCount must be 1 (a second replica would have its own, separate messages)" -}}
+{{- end -}}
+{{- if and (eq .Values.mode "enterprise") (not (index .Values.config "server" "public_base_url")) -}}
+{{- fail "securesend: mode enterprise requires config.server.public_base_url" -}}
+{{- end -}}
+{{- /* Behind an ingress every request arrives from the controller, so without
+       a way to read the forwarded address every client shares one rate-limit
+       bucket and the whole service is throttled together. */ -}}
+{{- if and .Values.ingress.enabled (not (index .Values.config "server" "trusted_proxies")) (not (index .Values.config "server" "trusted_hops")) -}}
+{{- fail "securesend: ingress is enabled but neither config.server.trusted_proxies nor config.server.trusted_hops is set, so every client would share one rate-limit bucket. Name the controller's pod network in trusted_proxies, or set trusted_hops to the number of proxies in front" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "securesend.fullname" . }}
+  labels:
+    {{- include "securesend.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    {{- if eq .Values.storage.backend "memory" }}
+    # Two copies for a moment would be two separate sets of messages.
+    type: Recreate
+    {{- else }}
+    # With a shared store, replicas are interchangeable and roll normally.
+    type: RollingUpdate
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "securesend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "securesend.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "securesend.config" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "securesend.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: securesend
+          image: {{ include "securesend.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve", "--config", "/config/cyphera-secure-send.yaml"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- if eq .Values.storage.backend "redis" }}
+            - name: CYPHERA_SECURESEND__STORAGE__REDIS__URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "securesend.redisSecretName" . }}
+                  key: url
+            {{- end }}
+            {{- if eq .Values.mode "enterprise" }}
+            - name: CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "securesend.oidcSecretName" . }}
+                  key: client-secret
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: management
+              containerPort: {{ .Values.management.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: management
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: management
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            {{- if .Values.branding.existingConfigMap }}
+            - name: branding
+              mountPath: /branding
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "securesend.fullname" . }}
+        {{- if .Values.branding.existingConfigMap }}
+        - name: branding
+          configMap:
+            name: {{ .Values.branding.existingConfigMap }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

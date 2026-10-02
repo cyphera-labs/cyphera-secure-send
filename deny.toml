@@ -1,0 +1,41 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # Marvin attack: a timing side channel in RSA private-key operations in the
+  # rsa crate, with no fixed release. The service reaches rsa only through the
+  # OpenID Connect library, which uses it to verify provider signatures with
+  # the public key, and through a test-only token signer. No RSA private key
+  # exists in the process, so there is nothing for the attack to recover.
+  # Revisit whenever rsa publishes a fix.
+  { id = "RUSTSEC-2023-0071", reason = "RSA is used for public-key signature verification only; no private-key operation exists in the service" },
+]
+
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  # Boost Software License, permissive; a hashing crate the Redis driver uses.
+  "BSL-1.0",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "OpenSSL",
+  "CDLA-Permissive-2.0",
+  "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

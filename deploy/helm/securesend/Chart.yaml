@@ -1,0 +1,18 @@
+apiVersion: v2
+name: securesend
+description: Cyphera SecureSend, one-time secret handoff for controlled environments. Encrypted in the browser, held in memory, delivered exactly once.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://cyphera.io/send
+sources:
+  - https://github.com/cyphera-labs/cyphera-secure-send
+maintainers:
+  - name: Cyphera
+    url: https://cyphera.io
+keywords:
+  - secrets
+  - one-time
+  - security
+annotations:
+  artifacthub.io/license: Apache-2.0

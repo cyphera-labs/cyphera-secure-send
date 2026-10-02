@@ -1,0 +1,10 @@
+/target
+/web/node_modules
+/web/dist
+/web/test-results
+/web/playwright-report
+*.log
+.DS_Store
+/config/local*
+/web/coverage
+/dist

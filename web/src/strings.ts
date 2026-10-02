@@ -1,0 +1,103 @@
+/**
+ * Every word the interface shows, in one place. Views take their text from
+ * here, so wording is changed here and nowhere else, and a translation is a
+ * second object of the same shape rather than a pass through every view.
+ *
+ * Entries that carry a value are functions, so the value's placement is the
+ * string's own business.
+ */
+export const S = {
+  common: {
+    signIn: "Sign in",
+    signOut: "Sign out",
+    help: "Help",
+    poweredBy: "Powered by Cyphera SecureSend",
+    copy: "Copy",
+    copied: "Copied",
+    selectAndCopy: "Select and copy",
+    sendAnother: "Send another",
+    sendAMessage: "Send a message",
+  },
+  errors: {
+    tooManyRequests: "Too many requests from your network. Wait a minute and try again.",
+    tooLarge: "The message is too large.",
+    atCapacity: "The service is at capacity. Try again shortly.",
+    unreachableTitle: "SecureSend",
+    unreachable: "The service is not reachable right now.",
+  },
+  standardNotice:
+    "Access is controlled by the secure link and the password. Email addresses are recorded but not verified.",
+  compose: {
+    signInToSend: "Sign in to send a secure message.",
+    yourEmail: "Your email",
+    recipientEmail: "Recipient email",
+    message: "Message",
+    password: "Password",
+    passwordHint: "Share it with the recipient through a different channel than the link.",
+    expiresAfter: "Expires after",
+    create: "Create secure link",
+    show: "Show",
+    hide: "Hide",
+    suggest: "Suggest",
+    byteCount: (used: number, limit: number) => `${used.toLocaleString()} / ${limit.toLocaleString()} bytes`,
+    invalidAddresses: "Enter a valid sender and recipient email address.",
+    enterMessage: "Enter a message.",
+    overLimit: (limit: number) => `The message is limited to ${limit.toLocaleString()} bytes.`,
+    passwordTooShort: "Use a password of at least 8 characters, or pick Suggest.",
+    encrypting: "Encrypting…",
+    creatingLink: "Creating link…",
+    couldNotCreate: "Could not create the message. Try again.",
+  },
+  created: {
+    title: "Secure link created",
+    recipient: "Recipient",
+    expires: "Expires",
+    shareLink: "Share this link with the recipient",
+    shareLinkAria: "Secure link",
+    passwordWarning: "Share the password through a different channel. Never send the link and the password together.",
+    keepRevokeLink: "Keep this link if you want to revoke later",
+    revokeLinkAria: "Revoke link",
+    cannotReopen: "This page cannot be reopened. Copy what you need before leaving it.",
+    revoke: "Revoke message",
+    revoking: "Revoking…",
+    revoked: "The message has been revoked. The link no longer works.",
+    couldNotRevoke: "Could not revoke. Try again.",
+  },
+  unavailable: {
+    title: "Message unavailable",
+    body: "This message may have been viewed already, revoked by the sender, or expired. It is not stored anywhere and cannot be recovered.",
+    askSender: "If you expected a message, ask the sender to create a new one.",
+  },
+  reveal: {
+    title: "You have a secure message",
+    signInToRead: "Sign in to read it. It can be viewed only once.",
+    signInToReadAsRecipient: "Sign in to read it. It can be viewed only once, by the person it was sent to.",
+    incompleteTitle: "Incomplete link",
+    incompleteBody: "This link is missing the part after the # sign. Copy the whole link exactly as the sender shared it.",
+    onlyOnce: "This message can be viewed only once. Make sure you are ready to read it now.",
+    password: "Password",
+    passwordHint: "The sender gave you this separately from the link.",
+    reveal: "Reveal message",
+    passwordMissing: "Enter the password.",
+    checking: "Checking…",
+    decrypting: "Decrypting…",
+    wrongOrGone: "The password may be wrong, or the message is no longer available. Check the password and try again.",
+    couldNotDecrypt: "Could not decrypt the message.",
+  },
+  revealed: {
+    title: "Message",
+    messageAria: "Message",
+    from: "From",
+    notVerified: " (as entered by the sender, not verified)",
+    copyMessage: "Copy message",
+    destroyed: "This message has been destroyed on the server. Do not refresh or leave this page until you have what you need.",
+  },
+  revoke: {
+    title: "Revoke a message",
+    body: "Revoking destroys the message if it has not been viewed yet. This cannot be undone.",
+    revoke: "Revoke message",
+    revoking: "Revoking…",
+    done: "Done. If the message was still waiting, it has been destroyed.",
+    couldNotRevoke: "Could not revoke. Try again.",
+  },
+} as const;

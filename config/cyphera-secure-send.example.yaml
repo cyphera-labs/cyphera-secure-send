@@ -1,0 +1,99 @@
+# Cyphera SecureSend configuration. Every key is optional; these are the
+# defaults. Any key can also be set as an environment variable:
+#   CYPHERA_SECURESEND__<SECTION>__<KEY>, for example
+#   CYPHERA_SECURESEND__BRANDING__COMPANY_NAME=Acme
+
+# standard: possession of the link and the password is the authority to
+#   retrieve. Sender and recipient are recorded but not verified. A supported
+#   mode, recommended where reaching the service is itself controlled, such as
+#   an internal network, a VPN, or a trusted team.
+# enterprise: users sign in at your identity provider. Two independent
+#   questions, set separately below: who may create a handoff, and what the
+#   recipient must prove to consume one.
+mode: standard
+
+server:
+  bind: 0.0.0.0:8080
+  public_base_url: null             # e.g. https://send.example.com; required for mode enterprise
+  management_bind: 127.0.0.1:9090   # liveness, readiness, metrics; keep private
+  trusted_proxies: []               # CIDRs whose X-Forwarded-For is honored
+  hsts: false                       # enable when served over HTTPS
+  shutdown_timeout_seconds: 10
+  request_timeout_seconds: 30       # a request must arrive in full within this
+  tls:
+    cert_path: null                 # set both to terminate TLS in-process
+    key_path: null
+
+messages:
+  ttl_options_seconds: [300, 900, 3600, 28800, 86400]
+  default_ttl_seconds: 3600
+  min_ttl_seconds: 60
+  max_ttl_seconds: 86400
+  max_plaintext_bytes: 65536
+  memory_budget_bytes: 268435456    # 256 MiB; a message that does not fit is refused, nothing is evicted
+  max_failed_proofs: 5              # wrong passwords before the message is destroyed
+  kdf:
+    algorithm: pbkdf2-sha256        # the one the interface derives with; the only one the API accepts
+    recommended_iterations: 600000  # the work factor; higher is slower to guess and slower to open
+    min_iterations: 100000
+    max_iterations: 5000000
+
+rate_limits:
+  create_per_minute: 10             # per client address
+  consume_per_minute: 30
+  revoke_per_minute: 30
+  auth_per_minute: 20               # sign-in starts and callbacks, enterprise mode
+  identity_create_per_minute: 30    # per signed-in identity, enterprise mode
+  identity_consume_per_minute: 60
+
+storage:
+  backend: memory
+
+audit:
+  sink: stdout                      # one JSON object per line
+  include_client_ip: false
+  include_user_agent: false
+
+enterprise:                         # used when mode is enterprise
+  oidc:
+    issuer: ""                      # Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0
+    client_id: ""
+    # client_secret: set CYPHERA_SECURESEND__ENTERPRISE__OIDC__CLIENT_SECRET, or:
+    client_secret_file: null
+    scopes: [openid, profile, email]
+    email_claim: email              # or preferred_username; no fallback between them
+    # Signing in proves control of an account, not of every address on it.
+    # refuse: reject a sign-in unless the token says the address is verified.
+    # accept: your directory is authoritative for the addresses it issues but
+    #   does not send the claim. A token saying "not verified" is still refused.
+    unverified_email: refuse
+    session_ttl_seconds: 28800
+    login_ttl_seconds: 600
+    trust_ca_path: null
+
+  creation:                         # who may SEND
+    require_oidc: true              # off allows anonymous creation; see docs/identity.md
+    allowed_domains: []             # your own domains, e.g. [example.com]. Empty allows any
+
+  recipient:                        # what the recipient must PROVE
+    require_oidc: true              # off: the link and the password are the whole authority
+    require_identity_match: true    # the reader must be the address the message names
+    external_recipients: false      # allow a recipient outside creation.allowed_domains
+
+branding:
+  product_name: Cyphera SecureSend
+  company_name: ""
+  tagline: Share sensitive information securely.
+  logo_path: null                   # e.g. /config/logo.svg
+  favicon_path: null                # e.g. /config/favicon.png
+  support_url: ""
+  footer_text: ""
+  show_powered_by: true
+  colors:
+    primary: "#1f4e79"
+    on_primary: "#ffffff"
+    secondary: "#4f6d8a"
+    surface: "#fbfcfe"
+    on_surface: "#191c1e"
+    surface_variant: "#e1e5ea"
+    error: "#ba1a1a"

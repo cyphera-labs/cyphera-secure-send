@@ -1,0 +1,221 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: web
+      - run: npm run typecheck
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    needs: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: web
+    # The store contract runs against a real Redis as well as memory.
+    services:
+      redis:
+        image: redis:7-alpine@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      SECURESEND_TEST_REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo test --locked
+
+  build:
+    name: Build (release)
+    runs-on: ubuntu-latest
+    needs: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo build --release --locked
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-cyclonedx@0.5.9
+      - run: cargo cyclonedx --format json --override-filename cyphera-secure-send.cyclonedx
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary
+          path: target/release/cyphera-secure-send
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: cyphera-secure-send.cyclonedx.json
+          retention-days: 7
+
+  e2e:
+    name: End-to-end (browser)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binary
+          path: target/debug
+      - run: chmod +x target/debug/cyphera-secure-send
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: web
+      # The local binary from the lockfile, never an on-demand fetch.
+      - run: ./node_modules/.bin/playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run e2e
+        working-directory: web
+
+  container:
+    name: Container
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: The image builds from source and answers
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: cyphera-secure-send:ci
+      - run: docker run --rm cyphera-secure-send:ci check-config
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binary
+          path: dist
+      - name: The release image assembles from a built binary and answers
+        run: |
+          mv dist/cyphera-secure-send dist/cyphera-secure-send-linux-amd64
+          docker buildx build --platform linux/amd64 -f Dockerfile.release -t cyphera-secure-send:release --load .
+          docker run --rm cyphera-secure-send:release check-config
+
+  deploy-templates:
+    name: Deploy templates
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binary
+          path: bin
+      - run: chmod +x bin/cyphera-secure-send
+      - name: Helm chart lints and its guards fire
+        run: |
+          helm lint deploy/helm/securesend
+          if helm template securesend deploy/helm/securesend --set replicaCount=2 > /dev/null 2>&1; then
+            echo "the memory-backend replica guard did not fire" >&2; exit 1
+          fi
+          if helm template securesend deploy/helm/securesend --set storage.backend=redis > /dev/null 2>&1; then
+            echo "the redis guard did not fire without a url or secret" >&2; exit 1
+          fi
+          helm template securesend deploy/helm/securesend --set storage.backend=redis --set storage.redis.url=redis://redis:6379 --set replicaCount=3 > /dev/null
+          if helm template securesend deploy/helm/securesend --set ingress.enabled=true > /dev/null 2>&1; then
+            echo "the ingress guard did not fire without a proxy setting" >&2; exit 1
+          fi
+          helm template securesend deploy/helm/securesend --set ingress.enabled=true --set config.server.trusted_hops=1 > /dev/null
+          if helm template securesend deploy/helm/securesend --set mode=enterprise > /dev/null 2>&1; then
+            echo "the enterprise guard did not fire without a public base url" >&2; exit 1
+          fi
+      - name: Everything the templates generate is configuration the service accepts
+        run: ./deploy/check-recipes.sh "$PWD/bin/cyphera-secure-send"
+      - name: Bicep compiles and the committed ARM template is current
+        run: |
+          az bicep install
+          az bicep build --file deploy/azure/main.bicep --outfile "${RUNNER_TEMP}/azuredeploy.json"
+          python3 - <<'PY'
+          import json, os
+          committed = json.load(open("deploy/azure/azuredeploy.json"))
+          built = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "azuredeploy.json")))
+          for d in (committed, built):
+              d.get("metadata", {}).pop("_generator", None)
+          if committed != built:
+              raise SystemExit("deploy/azure/azuredeploy.json is out of date; run: bicep build main.bicep --outfile azuredeploy.json")
+          PY
+      - name: CloudFormation template lints
+        run: |
+          pip install --quiet --only-binary :all: cfn-lint==1.56.3
+          cfn-lint deploy/aws/securesend-standalone.yaml
