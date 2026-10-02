@@ -22,8 +22,8 @@ A complete annotated file is at `config/cyphera-secure-send.example.yaml`.
 
 | Value | Meaning |
 |---|---|
-| `standard` (default) | Possession of the link and the password is the authority to retrieve. Sender and recipient are recorded but not verified, the interface says so, and audit events mark identities `asserted`. A supported mode, recommended where reaching the service is itself controlled: an internal network, a VPN, a trusted team. |
-| `enterprise` | Users sign in at your identity provider. Audit events mark identities `verified`. Requires `server.public_base_url`. See [identity.md](identity.md). |
+| `standard` (default) | Possession of the link and the password is the authority to retrieve. Sender and recipient are recorded but not verified, the interface says so, and audit events record `sender_authenticated: false`. A supported mode, recommended where reaching the service is itself controlled: an internal network, a VPN, a trusted team. |
+| `enterprise` | Users sign in at your identity provider. Audit events carry the issuer and subject, and say separately whether the sender was authenticated, whether the reader was, and whether recipient binding was enforced. Requires `server.public_base_url`. See [identity.md](identity.md). |
 
 Standard controls access through possession of the link and the password.
 Enterprise additionally establishes who is allowed to create a handoff and,
