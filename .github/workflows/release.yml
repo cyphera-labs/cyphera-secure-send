@@ -149,16 +149,28 @@ jobs:
           helm package deploy/helm/securesend --version "$version" --app-version "$version" --destination out
         env:
           REF_NAME: ${{ github.ref_name }}
+      # Two logins because two credential stores: helm keeps its own under
+      # its config directory, and cosign reads the Docker one. The chart is
+      # pushed by the first and signed by the second.
       - run: echo "${GITHUB_TOKEN}" | helm registry login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push the chart and record its digest
         id: push
         run: |
           out="$(helm push out/securesend-*.tgz "oci://ghcr.io/${REPO_OWNER}/charts" 2>&1)"
           echo "$out"
           digest="$(printf '%s\n' "$out" | sed -n 's/^Digest: //p')"
+          if [ -z "$digest" ]; then
+            echo "helm push printed no digest, so there is nothing to sign" >&2
+            exit 1
+          fi
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
         env:
           REPO_OWNER: ${{ github.repository_owner }}
